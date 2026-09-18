@@ -11,16 +11,16 @@
 	if mod(dt_uwb, dt_imu) ~= 0
 	    error('警告：UWB 采样周期必须是 IMU 采样周期的整数倍！');
 	end
-	t_end = 300;                
+	t_end = 180;                
 	N_steps = round(t_end / dt_imu) + 1; 
 	% ==================================================
 	% 在此处自由修改车辆数(4-18)与基站数(4-20)
-	Vehicle_num = 12;            
-	Anchor_num = 6;             
+	Vehicle_num = 8;            
+	Anchor_num = 22;             
 	% ==================================================
 	% 保存路径
-	save_dir = 'E:\DMLKF_Prj\Data\diff_V_6Anc'; 
-	trajectories_mat_name = sprintf('Trj_data_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num);
+	save_dir = 'E:\DMLKF_code\Data'; 
+	trajectories_mat_name = sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num);
 	% 噪声参数
 	IMU_noise_params.sigma_na = 0.03;      
 	IMU_noise_params.sigma_nw = 0.003;     
