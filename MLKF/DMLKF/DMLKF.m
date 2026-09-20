@@ -35,10 +35,11 @@ classdef DMLKF < handle
             obj.UWB_sigma_anc = 0.1;
             obj.UWB_sigma_rel = 0.1;
             
-            obj.max_iter = 40;
-            obj.epsilon  = 0.03;
-            obj.beta_inv = 0.1;  
-            obj.max_step = 0.2;  % [防护] 每次迭代单节点最多移动 1 米
+            % 主要调整的超参数就是下面四个 在0.2数据集下目前最优 
+            obj.max_iter = 40;   % GN迭代次数
+            obj.epsilon  = 0.03; % 残差收敛阈值
+            obj.beta_inv = 0.1;  % 海森正定保护数值
+            obj.max_step = 0.2;  % [防护] 每次迭代单节点最多移动上限
             
             Sigma_0 = blkdiag((0.1^2)*eye(3), (0.1^2)*eye(3), ((pi/180)^2)*eye(3));
             obj.Nodes = cell(Vehicle_num, 1);
