@@ -38,7 +38,7 @@ classdef DMLKF < handle
             
             obj.max_iter = 40;
             obj.epsilon  = 0.01;
-            obj.beta_inv = 0.01;  
+            obj.beta_inv = 0.1;  
             obj.alpha    = 0.6;  
             obj.max_step = 0.2;  % [防护] 每次迭代单节点最多移动 1 米
             

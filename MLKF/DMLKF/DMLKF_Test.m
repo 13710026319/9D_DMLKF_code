@@ -11,7 +11,7 @@ run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新
 bias_comp_ratio = 1; 
 
 % [新增] 控制截取数据集的比例 (例如 0.8 表示只跑前 80% 的数据，1.0为全部)
-data_ratio  = 0.1;
+data_ratio  = 0.4;
 
 % 路径配置
 data_dir = 'E:\DMLKF_code\Data';
