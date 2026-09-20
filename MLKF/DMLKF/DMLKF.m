@@ -17,7 +17,6 @@ classdef DMLKF < handle
         max_iter
         epsilon
         beta_inv % LM 阻尼系数 (保证 H 矩阵正定下限)
-        alpha    % 学习率/步长
         max_step % [新增防护] 单次牛顿迭代最大移动阈值(防爆墙)
         
         Nodes 
@@ -37,9 +36,8 @@ classdef DMLKF < handle
             obj.UWB_sigma_rel = 0.1;
             
             obj.max_iter = 40;
-            obj.epsilon  = 0.01;
+            obj.epsilon  = 0.03;
             obj.beta_inv = 0.1;  
-            obj.alpha    = 1;  
             obj.max_step = 0.2;  % [防护] 每次迭代单节点最多移动 1 米
             
             Sigma_0 = blkdiag((0.1^2)*eye(3), (0.1^2)*eye(3), ((pi/180)^2)*eye(3));
@@ -125,7 +123,34 @@ classdef DMLKF < handle
                     W_c(i, i, c) = 1 - sum_w;
                 end
             end
-            
+            % ========================================================
+            % [新增] 2.5 提取通信拓扑的代数连通度特征值 lambda_2 (论文理论依据)
+            % ========================================================
+            Adj_global = zeros(I_num, I_num);
+            for i = 1:I_num
+                Adj_global(i, N_list{i}) = 1;
+            end
+            W_global = zeros(I_num, I_num);
+            for i = 1:I_num
+                deg_i = sum(Adj_global(i,:));
+                sum_w_global = 0;
+                for j = find(Adj_global(i,:))
+                    deg_j = sum(Adj_global(j,:));
+                    w_g = 1 / (1 + max(deg_i, deg_j));
+                    W_global(i,j) = w_g;
+                    sum_w_global = sum_w_global + w_g;
+                end
+                W_global(i,i) = 1 - sum_w_global;
+            end
+            % 计算第二大特征值
+            eig_W = sort(real(eig(W_global)), 'descend');
+            if length(eig_W) >= 2
+                lambda_2 = eig_W(2);
+            else
+                lambda_2 = 0.5;
+            end
+            lambda_2 = max(0.01, min(0.99, lambda_2)); % 限制防爆
+
             % --- 3. D-GN 初始化 ---
             S = zeros(3, I_num, I_num);
             G = zeros(3, I_num, I_num);
@@ -143,13 +168,22 @@ classdef DMLKF < handle
                     end
                 end
             end
-            
+
+            % ========================================================
+            % [新增] 3.5 分布式步长估计初始化 (论文 Eq 33)
+            % ========================================================
+            R_est = zeros(3, 3, I_num);
+            r_prev = zeros(3, 3, I_num);
+            alpha_nodes = zeros(I_num, 1);
+            for i = 1:I_num
+                R_est(:,:,i) = eye(3); % 初始化 R 为单位阵
+                % k=1 时的初始最优步长
+                alpha_nodes(i) = (1 - lambda_2) / (1 + sqrt(lambda_2)); 
+            end
+
             % --- 4. 分布式高斯-牛顿迭代 ---
             for iter = 1:obj.max_iter
                 S_next = S; G_next = zeros(size(G)); H_next = zeros(size(H_mat));
-
-                % 让步长随迭代衰减，早期小步试探、后期逐渐加大到接近真实Newton步，可以打破振荡。
-                alpha_k = obj.alpha / (1 + 0.1 * (iter - 1));
                             
                 % A. 本地计算与状态共识
                 for i = 1:I_num
@@ -195,7 +229,7 @@ classdef DMLKF < handle
                         for j = comm_nodes'
                             sum_s = sum_s + W_c(i, j, c) * S(:, c, j);
                         end
-                        S_next(:, c, i) = sum_s - alpha_k * ds(3*c_idx-2 : 3*c_idx);
+                        S_next(:, c, i) = sum_s - alpha_nodes(i) * ds(3*c_idx-2 : 3*c_idx);
                         
                     end
                 end
@@ -270,14 +304,72 @@ classdef DMLKF < handle
                     end
                 end
                 
+                % ========================================================
+                % [新增] D. 分布式理论最优步长更新 (论文 Eq 33 & 34)
+                % ========================================================
+                R_est_next = zeros(3, 3, I_num);
+                for i = 1:I_num
+                    if isempty(U_list{i}), continue; end
+                    
+                    idx_ego = find(U_list{i} == i);
+                    if isempty(idx_ego), continue; end
+                    
+                    % 1. 提取当前节点的局部海森与一致性海森
+                    h_local_ego = h_new_all{i}{idx_ego, idx_ego}; 
+                    H_cons_ego = H_next(:, :, idx_ego, idx_ego, i); 
+                    
+                    % 防止求逆奇异
+                    H_cons_reg = H_cons_ego + obj.beta_inv * eye(3);
+                    
+                    % 2. 计算残差特征 r_{k+1}^i
+                    % 注意：因为一致性矩阵隐式计算了 Average，因此这里无需除以 I_num，
+                    % 在多次共识后自然逼近论文中的 R 矩阵。
+                    r_curr = h_local_ego / H_cons_reg; 
+                    
+                    if iter == 1
+                        r_prev(:,:,i) = r_curr; % 首次不产生差分冲击
+                    end
+                    
+                    % 3. R 矩阵的动态平均一致性 (Eq 33)
+                    sum_R = zeros(3,3);
+                    % [核心修正] R 矩阵估计的是全网平均曲率差异，必须使用全局拓扑 W_global 进行共识
+                    comm_nodes_global = [i, N_list{i}]; % 包含自己和所有直接物理邻居
+                    for j = comm_nodes_global
+                        sum_R = sum_R + W_global(i, j) * R_est(:,:,j);
+                    end
+                    
+                    R_est_next(:,:,i) = sum_R + r_curr - r_prev(:,:,i);
+                    r_prev(:,:,i) = r_curr; % 缓存供下一轮使用
+                    
+                    % 4. 提取标量特征 s_i
+                    R_i = R_est_next(:,:,i);
+                    try
+                        norm_R = norm(R_i, 2);
+                        norm_invR = norm(inv(R_i + 1e-8*eye(3)), 2);
+                        s_i = 0.5 * (norm_R + 1 / norm_invR);
+                    catch
+                        s_i = 1.0;
+                    end
+                    s_i = max(0.1, min(10, s_i)); % 限制特征值畸变
+                    
+                    % 5. 解析求解论文公式 (34) 得到最优步长 
+                    % (将复杂的根号方程化简为极其优雅的闭式解)
+                    alpha_opt = (1 - lambda_2) / (1 + sqrt(s_i * lambda_2));
+                    
+                    % 6. 更新下一轮的节点步长 (加入阈值保护)
+                    alpha_nodes(i) = max(0.05, min(1.0, alpha_opt)); 
+                end
+                R_est = R_est_next;
+                % ========================================================
+
                 err = max(abs(S_next(:) - S(:)));
                 S = S_next; G = G_next; H_mat = H_next;
                 if err < obj.epsilon, break; end
             end
             % [诊断] 若始终跑满20次仍未收敛，说明H_mat远未逼近真值，Bug4的隐患会更严重
-            % if iter == obj.max_iter && err >= obj.epsilon
-            %     fprintf('警告: 节点未在%d次内收敛, 残差=%.6f\n', obj.max_iter, err);
-            % end
+            if iter == obj.max_iter && err >= obj.epsilon
+                fprintf('警告: 节点未在%d次内收敛, 残差=%.6f\n', obj.max_iter, err);
+            end
             
             % --- 5. Posterior Fusion & Schur Marginalization ---
             % [防护] 时序冻结：提前缓存当前步的所有先验，切断 Data Incest 循环污染！
