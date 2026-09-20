@@ -36,11 +36,11 @@ classdef CMLKF < handle
             obj.dt_imu = dt_imu;
             obj.g_vec = [0; 0; -9.81];
             
-            % 1. 基于生成脚本设置合理的默认噪声参数 (可根据需要在此修改)
-            obj.IMU_Sigma_a = (0.03)^2 * eye(3);      % sigma_na = 0.03
-            obj.IMU_Sigma_w = (0.003)^2 * eye(3);     % sigma_nw = 0.003
-            obj.UWB_sigma_anc = 0.3;                  % sigma_anc = 0.3
-            obj.UWB_sigma_rel = 0.3;                  % sigma_rel = 0.3
+            % 1. 模拟不可信的先验，将IMU的参数置信度稍调大
+            obj.IMU_Sigma_a = (0.07)^2 * eye(3);      % sigma_na = 0.07
+            obj.IMU_Sigma_w = (0.007)^2 * eye(3);     % sigma_nw = 0.007
+            obj.UWB_sigma_anc = 0.1;                  % sigma_anc = 0.1
+            obj.UWB_sigma_rel = 0.1;                  % sigma_rel = 0.1
             obj.epsilon = 1e-4;
             obj.max_iter = 10;
             

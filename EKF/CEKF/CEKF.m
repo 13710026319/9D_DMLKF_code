@@ -32,11 +32,11 @@ classdef CEKF < handle
             obj.dt_imu = dt_imu;
             obj.g_vec = [0; 0; -9.81];
             
-            % 1. 设置合理的默认噪声参数 (与CMLKF保持一致)
-            obj.IMU_Sigma_a = (0.03)^2 * eye(3);      
-            obj.IMU_Sigma_w = (0.003)^2 * eye(3);     
-            obj.UWB_sigma_anc = 0.3;                  
-            obj.UWB_sigma_rel = 0.3;                  
+            % 1. 设置合理的默认噪声参数
+            obj.IMU_Sigma_a = (0.05)^2 * eye(3);      
+            obj.IMU_Sigma_w = (0.005)^2 * eye(3);     
+            obj.UWB_sigma_anc = 0.1;                  
+            obj.UWB_sigma_rel = 0.1;                  
             
             % 2. 初始化状态
             obj.p = p0;

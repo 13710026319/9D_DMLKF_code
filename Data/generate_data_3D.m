@@ -11,23 +11,23 @@
 	if mod(dt_uwb, dt_imu) ~= 0
 	    error('警告：UWB 采样周期必须是 IMU 采样周期的整数倍！');
 	end
-	t_end = 180;                
+	t_end = 100;                % 运行时间修改为 200s (配合 1.0m/s 高速机动)
 	N_steps = round(t_end / dt_imu) + 1; 
 	% ==================================================
 	% 在此处自由修改车辆数(4-18)与基站数(4-20)
 	Vehicle_num = 8;            
-	Anchor_num = 22;             
+	Anchor_num = 4;             
 	% ==================================================
 	% 保存路径
 	save_dir = 'E:\DMLKF_code\Data'; 
 	trajectories_mat_name = sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num);
 	% 噪声参数
-	IMU_noise_params.sigma_na = 0.03;      
-	IMU_noise_params.sigma_nw = 0.003;     
-	IMU_noise_params.sigma_ba = 0.001;     
-	IMU_noise_params.sigma_bw = 0.0001;    
-	UWB_noise_params.sigma_anc = 0.3;     
-	UWB_noise_params.sigma_rel = 0.3;  
+	IMU_noise_params.sigma_na = 0.05;      
+	IMU_noise_params.sigma_nw = 0.005;     
+	IMU_noise_params.sigma_ba = 0.005;     
+	IMU_noise_params.sigma_bw = 0.0005;    
+	UWB_noise_params.sigma_anc = 0.15;     
+	UWB_noise_params.sigma_rel = 0.15;  
 	%% 2. 环境与真值轨迹生成 (调用外部 env_setup.m)
 	[trajectories, anchors] = env_setup(Vehicle_num, Anchor_num, N_steps, dt_imu, t_end);
 	%% 3. 生成含有零偏与白噪声的 100Hz 3D IMU 测量信号
@@ -103,29 +103,31 @@
 	    end
 	    trajectories.(v_name).UWB_Relative = UWB_Relative;
 	end
+	% ==================== 替换第 5 部分的轨迹可视化 ====================
 	%% 5. 轨迹可视化 (三维立体作图以确认高度不共面)
-	figure('Name', 'Multi-Agent 最优 3D 协同定位拓扑轨迹', 'Position', [100, 100, 850, 650]);
+	figure('Name', 'Multi-Agent 最优 3D 协同定位拓扑轨迹', 'Position', [100, 100, 900, 700]);
 	hold on; grid on; axis equal;
-	xlabel('X 轴位置'); ylabel('Y 轴位置'); zlabel('高度 Z (m)');
-	title(sprintf('%d机动态立体分层轨迹与最优不共面基站布设', Vehicle_num));
-	% 绘制边界立体框
-	line([0, 20, 20, 0, 0], [0, 0, 40, 40, 0], [0, 0, 0, 0, 0], 'Color', [0.5,0.5,0.5], 'LineStyle', '--');
-	line([0, 20, 20, 0, 0], [0, 0, 40, 40, 0], [8, 8, 8, 8, 8], 'Color', [0.5,0.5,0.5], 'LineStyle', '--');
-	for corner = [0, 20]
-	    for side = [0, 40]
-	        line([corner, corner], [side, side], [0, 8], 'Color', [0.5,0.5,0.5], 'LineStyle', '--');
+	xlabel('X 轴位置 (m)'); ylabel('Y 轴位置 (m)'); zlabel('高度 Z (m)');
+	title(sprintf('%d机 高动态穿梭航线 (直线+弧形) 与最优基站布设', Vehicle_num));
+    
+	% 绘制 120x120x15 的广域新边界立体框
+	X_max = 120; Y_max = 120; Z_max = 15;
+	line([0, X_max, X_max, 0, 0], [0, 0, Y_max, Y_max, 0], [0, 0, 0, 0, 0], 'Color', [0.5,0.5,0.5], 'LineStyle', '--');
+	line([0, X_max, X_max, 0, 0], [0, 0, Y_max, Y_max, 0], [Z_max, Z_max, Z_max, Z_max, Z_max], 'Color', [0.5,0.5,0.5], 'LineStyle', '--');
+	for corner = [0, X_max]
+	    for side = [0, Y_max]
+	        line([corner, corner], [side, side], [0, Z_max], 'Color', [0.5,0.5,0.5], 'LineStyle', '--');
 	    end
 	end
 	% 绘制最优不共面基站
 	h_anchor = plot3(anchors(:,1), anchors(:,2), anchors(:,3), '^', 'MarkerSize', 13, ...
-	    'MarkerFaceColor', 'r', 'MarkerEdgeColor', 'k', 'LineWidth', 1.5, 'DisplayName', '最优立体基站 (0m~8m)');
+	    'MarkerFaceColor', 'r', 'MarkerEdgeColor', 'k', 'LineWidth', 1.5, 'DisplayName', '最优立体基站');
 	colors = lines(Vehicle_num);
 	h_traj = zeros(1, Vehicle_num);
 	for n = 1:Vehicle_num
 	    v_data = trajectories.(sprintf('V%d', n));
 	    h_traj(n) = plot3(v_data.X_true, v_data.Y_true, v_data.Z_true, 'Color', colors(n,:), 'LineWidth', 2.5, ...
-	        'DisplayName', sprintf('无人机 V%d (3D动态斜线)', n));
-	    % 标记起始点和终点
+	        'DisplayName', sprintf('无人机 V%d', n));
 	    plot3(v_data.X_true(1), v_data.Y_true(1), v_data.Z_true(1), 'o', 'MarkerSize', 8, 'MarkerFaceColor', colors(n,:), 'Color', colors(n,:));
 	    plot3(v_data.X_true(end), v_data.Y_true(end), v_data.Z_true(end), '*', 'MarkerSize', 10, 'Color', colors(n,:));
 	end

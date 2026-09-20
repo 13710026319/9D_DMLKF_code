@@ -4,7 +4,7 @@ clc; clear; close all;
 
 %% 1. 测试参数配置
 Vehicle_num = 8;            
-Anchor_num = 22;             
+Anchor_num = 6;             
 run_flag = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行并覆盖
 
 % 路径配置
@@ -70,9 +70,9 @@ for k = 2:N_steps
     gyro_m = zeros(3, Vehicle_num);
     for i = 1:Vehicle_num
         v_name = sprintf('V%d', i);
-        % 在此处直接扣除零偏真值，使得滤波器输入为零偏置状态
-        acc_m(:, i)  = trajectories.(v_name).IMU_acc_m(k-1, :)' - trajectories.(v_name).IMU_bias_a_true(k-1, :)';
-        gyro_m(:, i) = trajectories.(v_name).IMU_gyro_m(k-1, :)' - trajectories.(v_name).IMU_bias_w_true(k-1, :)';
+        % 在此处模拟IMU扰动以及一定的偏置累加影响
+        acc_m(:, i)  = trajectories.(v_name).IMU_acc_m(k-1, :)' - 0.5*trajectories.(v_name).IMU_bias_a_true(k-1, :)';
+        gyro_m(:, i) = trajectories.(v_name).IMU_gyro_m(k-1, :)' - 0.5*trajectories.(v_name).IMU_bias_w_true(k-1, :)';
     end
     kf.predict(acc_m, gyro_m);
     
