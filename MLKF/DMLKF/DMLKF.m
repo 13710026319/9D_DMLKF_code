@@ -39,7 +39,7 @@ classdef DMLKF < handle
             obj.max_iter = 40;
             obj.epsilon  = 0.01;
             obj.beta_inv = 0.1;  
-            obj.alpha    = 0.6;  
+            obj.alpha    = 1;  
             obj.max_step = 0.2;  % [防护] 每次迭代单节点最多移动 1 米
             
             Sigma_0 = blkdiag((0.1^2)*eye(3), (0.1^2)*eye(3), ((pi/180)^2)*eye(3));
@@ -275,9 +275,9 @@ classdef DMLKF < handle
                 if err < obj.epsilon, break; end
             end
             % [诊断] 若始终跑满20次仍未收敛，说明H_mat远未逼近真值，Bug4的隐患会更严重
-            if iter == obj.max_iter && err >= obj.epsilon
-                fprintf('警告: 节点未在%d次内收敛, 残差=%.6f\n', obj.max_iter, err);
-            end
+            % if iter == obj.max_iter && err >= obj.epsilon
+            %     fprintf('警告: 节点未在%d次内收敛, 残差=%.6f\n', obj.max_iter, err);
+            % end
             
             % --- 5. Posterior Fusion & Schur Marginalization ---
             % [防护] 时序冻结：提前缓存当前步的所有先验，切断 Data Incest 循环污染！

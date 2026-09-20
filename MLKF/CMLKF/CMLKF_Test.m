@@ -1,5 +1,6 @@
 % CMLKF_Test.m 
 % CMLKF集中式最大似然卡尔曼滤波算法 - 测试与评价脚本
+
 clc; clear; close all;
 
 %% 1. 测试参数配置
@@ -69,7 +70,7 @@ for k = 2:N_steps
     gyro_m = zeros(3, Vehicle_num);
     for i = 1:Vehicle_num
         v_name = sprintf('V%d', i);
-        % 在此处模拟IMU扰动以及一定的偏置累加影响
+        % 在此处模拟IMU扰动以及一定的偏置累加影响 运行时间越长差距越大
         acc_m(:, i)  = trajectories.(v_name).IMU_acc_m(k-1, :)' - 0.5*trajectories.(v_name).IMU_bias_a_true(k-1, :)';
         gyro_m(:, i) = trajectories.(v_name).IMU_gyro_m(k-1, :)' - 0.5*trajectories.(v_name).IMU_bias_w_true(k-1, :)';
     end
