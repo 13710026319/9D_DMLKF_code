@@ -28,9 +28,9 @@ classdef DEKF < handle
             obj.dt_imu = dt_imu;
             obj.g_vec = [0; 0; -9.81];
             
-            % 噪声参数 (应与测试脚本和 DMLKF 中保持一致)
-            obj.IMU_Sigma_a = (0.05)^2 * eye(3);
-            obj.IMU_Sigma_w = (0.005)^2 * eye(3);
+            % 噪声参数 (与 DMLKF 中保持一致)
+            obj.IMU_Sigma_a = (0.07)^2 * eye(3);
+            obj.IMU_Sigma_w = (0.007)^2 * eye(3);
             obj.UWB_sigma_anc = 0.1;
             obj.UWB_sigma_rel = 0.1;
             

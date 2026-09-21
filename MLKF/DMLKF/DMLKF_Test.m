@@ -4,8 +4,9 @@ clc; clear; close all;
 
 %% 1. 测试参数与运行配置
 Vehicle_num = 8;            
-Anchor_num  = 4;             
-run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行并覆盖
+Anchor_num  = 6;             
+run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
+save_flag   = 0;
 
 % 故意保留 30% 未知零偏以破坏先验，凸显纯测距优化优势 (1.0为完全补偿)
 bias_comp_ratio = 1; 
@@ -20,8 +21,8 @@ if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
 
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
-res_file  = fullfile(res_dir, sprintf('DMLKF_Veh%d_Anc%d.mat', Vehicle_num, Anchor_num));
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D_1.mat', Vehicle_num, Anchor_num));
+res_file  = fullfile(res_dir, sprintf('DMLKF_Veh%d_Anc%d_20.mat', Vehicle_num, Anchor_num));
 
 %% 2. 检查结果文件是否存在 (run_flag 机制)
 if run_flag == 0 && exist(res_file, 'file')
@@ -191,11 +192,12 @@ mean_rmse_v = mean(rmse_v);
 mean_rmse_att = mean(rmse_att);
 
 %% 8. 保存结果文件并打印
-% save(res_file, 'est_p', 'est_v', 'est_R', 'rmse_p', 'rmse_v', 'rmse_att', ...
-%                'mean_rmse_p', 'mean_rmse_v', 'mean_rmse_att', ...
-%                'Anchor_Mask', 'V2V_Mask');
-% fprintf('运行完成，结果已保存至: %s\n', res_file);
-
+if save_flag == 1
+    save(res_file, 'est_p', 'est_v', 'est_R', 'rmse_p', 'rmse_v', 'rmse_att', ...
+                   'mean_rmse_p', 'mean_rmse_v', 'mean_rmse_att', ...
+                   'Anchor_Mask', 'V2V_Mask');
+    fprintf('运行完成，结果已保存至: %s\n', res_file);
+end
 print_results(Vehicle_num, rmse_p, rmse_v, rmse_att, mean_rmse_p, mean_rmse_v, mean_rmse_att);
 
 %% ==== 局部打印辅助函数 ====
