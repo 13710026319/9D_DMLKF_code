@@ -25,6 +25,7 @@ classdef CMLKF < handle
         epsilon           % Gauss-Newton 迭代收敛阈值 (默认 1e-4)
         max_iter          % Gauss-Newton 最大迭代次数 (默认 10)
         Pi_mat            % 投影选择矩阵 \pi (3I x 9I)
+        max_step 
     end
     
     methods
@@ -43,7 +44,8 @@ classdef CMLKF < handle
             obj.UWB_sigma_rel = 0.1;                  % sigma_rel = 0.1
             obj.epsilon = 1e-4;
             obj.max_iter = 10;
-            
+            obj.max_step = 1; 
+
             % 2. 初始化状态
             % p0, v0 应为 3I x 1 列向量；R0 应为 3 x 3 x I 矩阵
             obj.p = p0;
@@ -197,10 +199,10 @@ classdef CMLKF < handle
                 delta_p = (Omega + 1e-2 * eye(3 * obj.Vehicle_num)) \ b;
 
                 % 增加防飞车步长限制（如果单次迭代移动超过 1 米，强制截断）
-                max_step = 1;
+                
                 step_norm = norm(delta_p);
-                if step_norm > max_step
-                    delta_p = delta_p * (max_step / step_norm);
+                if step_norm > obj.max_step
+                    delta_p = delta_p * (obj.max_step / step_norm);
                 end
                 
                 % 位置更新 (Eq 45)

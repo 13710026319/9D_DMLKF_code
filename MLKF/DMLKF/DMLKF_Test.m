@@ -3,15 +3,16 @@
 clc; clear; close all;
 
 %% 1. 测试参数与运行配置
-Vehicle_num = 8;            
-Anchor_num  = 6;             
+Vehicle_num = 15;            
+Anchor_num  = 3;     
+neighbor_k  = 7; % 邻居数
 run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
 save_flag   = 0;
 
 % 故意保留 30% 未知零偏以破坏先验，凸显纯测距优化优势 (1.0为完全补偿)
 bias_comp_ratio = 1; 
 
-% [新增] 控制截取数据集的比例 (例如 0.8 表示只跑前 80% 的数据，1.0为全部)
+% 控制截取数据集的比例 (例如 0.8 表示只跑前 80% 的数据，1.0为全部)
 data_ratio  = 0.2;
 
 % 路径配置
@@ -39,12 +40,10 @@ end
 load(data_file, 'trajectories', 'anchors', 'IMU_noise_params', 'UWB_noise_params');
 fprintf('数据集加载成功，开始运行 DMLKF 算法...\n');
 
-% N_steps = length(trajectories.V1.Time_true);
 N_steps_total = length(trajectories.V1.Time_true);
 N_steps = max(2, round(N_steps_total * data_ratio)); % 计算截断步数(至少保证有2步)
 fprintf('>> 实验设定的数据截取比例: %.1f%%\n', data_ratio * 100);
 fprintf('>> 实际运行步数 / 总步数: %d / %d\n', N_steps, N_steps_total);
-
 dt_imu = trajectories.V1.Time_true(2) - trajectories.V1.Time_true(1);
 
 %% 4. 生成静态拓扑掩码 (三档基站 + K-Regular 车间)
@@ -57,8 +56,8 @@ for i = 1:Vehicle_num
         % Tier 1: 保持全 1
     elseif i <= N_tier1 + N_tier2
         % Tier 2: 仅保留偶数基站
-        for k = 1:Anchor_num
-            if mod(k, 2) ~= 0, Anchor_Mask(i, k) = 0; end
+        for anc_idx = 1:Anchor_num
+            if mod(anc_idx, 2) ~= 0, Anchor_Mask(i, anc_idx) = 0; end
         end
     else
         % Tier 3: 纯相对测距
@@ -66,14 +65,22 @@ for i = 1:Vehicle_num
     end
 end
 
-% B. 车间掩码 (K=4 静态环形拓扑)
-K_degree = min(4, Vehicle_num - 1); 
+% B. 车间掩码 (支持奇数/偶数邻居数的静态环形拓扑)
+K_degree = min(neighbor_k, Vehicle_num - 1); 
 V2V_Mask = zeros(Vehicle_num, Vehicle_num);
+
+K_fwd = ceil(K_degree / 2);  % 前面(序号变大方向)分大头
+K_bwd = floor(K_degree / 2); % 后面(序号变小方向)分小头
+
 for i = 1:Vehicle_num
-    for d = 1:floor(K_degree/2)
+    % 往后(序号变大方向)连 K_fwd 个
+    for d = 1:K_fwd
         idx_forward = mod(i + d - 1, Vehicle_num) + 1;
-        idx_backward = mod(i - d - 1, Vehicle_num) + 1;
         V2V_Mask(i, idx_forward) = 1;
+    end
+    % 往前(序号变小方向)连 K_bwd 个
+    for d = 1:K_bwd
+        idx_backward = mod(i - d - 1, Vehicle_num) + 1;
         V2V_Mask(i, idx_backward) = 1;
     end
 end
@@ -83,7 +90,6 @@ V2V_Mask(logical(eye(Vehicle_num))) = 0; % 自身对自身设0
 p0 = zeros(3 * Vehicle_num, 1);
 v0 = zeros(3 * Vehicle_num, 1);
 R0 = zeros(3, 3, Vehicle_num);
-
 for i = 1:Vehicle_num
     v_name = sprintf('V%d', i);
     p_true_init = [trajectories.(v_name).X_true(1); trajectories.(v_name).Y_true(1); trajectories.(v_name).Z_true(1)];
@@ -93,7 +99,6 @@ for i = 1:Vehicle_num
     v0(3*i-2 : 3*i) = v_true_init(:);
     R0(:, :, i)     = trajectories.(v_name).R_true(:, :, 1); 
 end
-
 kf = DMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
 
 % 结果存储空间
@@ -109,7 +114,6 @@ end
 %% 6. 滤波主循环
 uwb_idx = 2; 
 UWB_Time_Vec = trajectories.V1.UWB_Anchor(:, 1);
-
 fprintf('开始迭代仿真 (共 %d 步)...\n', N_steps);
 for k = 2:N_steps
     % --- A. 100Hz 预测过程 ---
@@ -165,7 +169,7 @@ rmse_att = zeros(Vehicle_num, 1);
 for i = 1:Vehicle_num
     v_name = sprintf('V%d', i);
     
-    % [修改] 截取前 N_steps 的轨迹真值，保证与 est_p 的维度一致
+    % 截取前 N_steps 的轨迹真值，保证与 est_p 的维度一致
     true_p = [trajectories.(v_name).X_true(1:N_steps), ...
               trajectories.(v_name).Y_true(1:N_steps), ...
               trajectories.(v_name).Z_true(1:N_steps)];

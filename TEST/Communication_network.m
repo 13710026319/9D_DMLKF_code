@@ -1,8 +1,7 @@
 % 拓扑网络生成与掩码测试脚本 (Demo)
 clc; clear;
-
-Vehicle_num = 8;
-Anchor_num = 6; % 假设有6个扁平基站
+Vehicle_num = 10;
+Anchor_num = 4; % 假设有4个基站
 
 %% 1. 生成基站拓扑掩码 (Anchor_Mask: I x K)
 % 比例: 30% Tier1, 50% Tier2, 20% Tier3
@@ -11,7 +10,6 @@ N_tier2 = round(0.5 * Vehicle_num);
 N_tier3 = Vehicle_num - N_tier1 - N_tier2;
 
 Anchor_Mask = ones(Vehicle_num, Anchor_num); % 1表示保留，0表示变NaN
-
 for i = 1:Vehicle_num
     if i <= N_tier1
         % Tier 1: 全基站 (全保留)
@@ -30,20 +28,26 @@ for i = 1:Vehicle_num
 end
 
 %% 2. 生成车间相对测距掩码 (V2V_Mask: I x I)
-% 采用静态 K-Regular Ring 拓扑 (例如每车固定连 4 个邻居)
-K_degree = 4; 
+% 采用静态拓扑，支持奇数或偶数个邻居 (奇数时前方多连一个，后方少连一个)
+K_degree = 5; % 测试奇数个邻居的情况
 V2V_Mask = zeros(Vehicle_num, Vehicle_num);
 
+K_fwd = ceil(K_degree / 2);  % 前面(序号变大方向)分大头
+K_bwd = floor(K_degree / 2); % 后面(序号变小方向)分小头
+
 for i = 1:Vehicle_num
-    for d = 1:(K_degree/2)
-        % 往后连 d 个，往前连 d 个 (考虑首尾相接环形)
+    % 往后(序号变大方向)连 K_fwd 个
+    for d = 1:K_fwd
         idx_forward = mod(i + d - 1, Vehicle_num) + 1;
-        idx_backward = mod(i - d - 1, Vehicle_num) + 1;
-        
         V2V_Mask(i, idx_forward) = 1;
+    end
+    % 往前(序号变小方向)连 K_bwd 个
+    for d = 1:K_bwd
+        idx_backward = mod(i - d - 1, Vehicle_num) + 1;
         V2V_Mask(i, idx_backward) = 1;
     end
 end
+
 % 确保对角线自身到自身不通信 (为0)
 V2V_Mask(logical(eye(Vehicle_num))) = 0;
 

@@ -15,8 +15,8 @@
 	N_steps = round(t_end / dt_imu) + 1; 
 	% ==================================================
 	% 在此处自由修改车辆数(4-18)与基站数(4-20)
-	Vehicle_num = 8;            
-	Anchor_num = 6;             
+	Vehicle_num = 15;            
+	Anchor_num = 3;             
 	% ==================================================
 	% 保存路径
 	save_dir = 'E:\DMLKF_code\Data'; 
@@ -26,8 +26,8 @@
 	IMU_noise_params.sigma_nw = 0.005;     
 	IMU_noise_params.sigma_ba = 0.005;     
 	IMU_noise_params.sigma_bw = 0.0005;    
-	UWB_noise_params.sigma_anc = 0.15;     
-	UWB_noise_params.sigma_rel = 0.15;  
+	UWB_noise_params.sigma_anc = 0.1;     
+	UWB_noise_params.sigma_rel = 0.1;  
 	%% 2. 环境与真值轨迹生成 (调用外部 env_setup.m)
 	[trajectories, anchors] = env_setup(Vehicle_num, Anchor_num, N_steps, dt_imu, t_end);
 	%% 3. 生成含有零偏与白噪声的 100Hz 3D IMU 测量信号

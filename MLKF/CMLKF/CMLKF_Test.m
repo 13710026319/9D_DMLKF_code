@@ -5,7 +5,7 @@ clc; clear; close all;
 
 %% 1. 测试参数配置
 Vehicle_num = 8;            
-Anchor_num = 6;             
+Anchor_num = 4;             
 run_flag = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行并覆盖
 
 % 路径配置

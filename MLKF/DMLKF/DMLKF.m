@@ -19,6 +19,7 @@ classdef DMLKF < handle
         beta_inv % LM 阻尼系数 (保证 H 矩阵正定下限)
         max_step % [新增防护] 单次牛顿迭代最大移动阈值(防爆墙)
         
+        print_flag = 1; % 是否打印残差收敛情况
         Nodes 
     end
     
@@ -37,9 +38,9 @@ classdef DMLKF < handle
             
             % 主要调整的超参数就是下面四个 在0.2数据集下目前最优 
             obj.max_iter = 40;   % GN迭代次数
-            obj.epsilon  = 0.03; % 残差收敛阈值
+            obj.epsilon  = 0.01; % 残差收敛阈值
             obj.beta_inv = 0.1;  % 海森正定保护数值
-            obj.max_step = 0.2;  % [防护] 每次迭代单节点最多移动上限
+            obj.max_step = 0.1;  % [防护] 每次迭代单节点最多移动上限
             
             Sigma_0 = blkdiag((0.1^2)*eye(3), (0.1^2)*eye(3), ((pi/180)^2)*eye(3));
             obj.Nodes = cell(Vehicle_num, 1);
@@ -368,7 +369,7 @@ classdef DMLKF < handle
                 if err < obj.epsilon, break; end
             end
             % [诊断] 若始终跑满20次仍未收敛，说明H_mat远未逼近真值，Bug4的隐患会更严重
-            if iter == obj.max_iter && err >= obj.epsilon
+            if iter == obj.max_iter && err >= obj.epsilon && obj.print_flag
                 fprintf('警告: 节点未在%d次内收敛, 残差=%.6f\n', obj.max_iter, err);
             end
             
