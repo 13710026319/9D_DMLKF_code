@@ -21,6 +21,14 @@ classdef CRBPF < handle
         rough_coeff      % roughening 扩散系数
         min_att_jitter   % roughening 绝对下限 (rad)
         
+        % 批处理与贫化监控参数
+        batch_size               % 渐进式权重更新的批大小 (等于单历元总测量数时即全量更新)
+        depletion_streak_limit   % 连续贫化警告次数上限，超过则终止本次运行
+        depletion_streak         % 当前连续贫化警告计数
+        update_count             % 累计 UWB 更新次数
+        resample_count           % 累计重采样次数
+        severe_count             % 累计严重贫化警告次数
+        
         % 全局线性动力学矩阵
         F_global
         Q_global
@@ -50,16 +58,24 @@ classdef CRBPF < handle
             obj.g_vec = [0; 0; -9.81];
             
             % 1. 设置严格的噪声配置
-            obj.IMU_Sigma_a = (0.07)^2 * eye(3);      
-            obj.IMU_Sigma_w = (0.007)^2 * eye(3);     
-            obj.UWB_sigma_anc = 0.3;                  
-            obj.UWB_sigma_rel = 0.3;                  
+            obj.IMU_Sigma_a = (0.10)^2 * eye(3);      
+            obj.IMU_Sigma_w = (0.010)^2 * eye(3);     
+            obj.UWB_sigma_anc = 0.075;                  
+            obj.UWB_sigma_rel = 0.075;                  
             
             % 2. 粒子与抗贫化配置
-            obj.Np = 3000;            
-            obj.neff_ratio = 0.5;     % 重采样门槛
-            obj.rough_coeff = 0.1;    % 重采样后注入噪声的扩散程度
+            obj.Np = 8000;            
+            obj.neff_ratio = 0.7;     % 重采样门槛
+            obj.rough_coeff = 0.05;    % 重采样后注入噪声的扩散程度
             obj.min_att_jitter = 0.001; % 重采样后注入的抖动下限
+            
+            % 2b. 批处理与贫化监控配置
+            obj.batch_size = 20;              % 渐进式批处理窗口 (40 = 单历元全量测量)
+            obj.depletion_streak_limit = 4;   % 连续 4 次贫化警告后仍继续则终止本次运行
+            obj.depletion_streak = 0;
+            obj.update_count = 0;
+            obj.resample_count = 0;
+            obj.severe_count = 0;
             
             % 3. 构建全局线性卡尔曼矩阵 (F_global 和 Q_global)
             % 由于位置速度更新在条件姿态下是严格线性的，且 Q 独立于具体姿态近似为常数块
@@ -100,6 +116,32 @@ classdef CRBPF < handle
             obj.p = p0;
             obj.v = v0;
             obj.R = R0;
+        end
+        
+        function set_particle_count(obj, Np_new)
+            % 用当前 MMSE 状态重新铺设粒子群 (须在构造后、滤波开始前调用)
+            I_num = obj.Vehicle_num;
+            obj.Np = Np_new;
+            
+            obj.P_Xl = zeros(6*I_num, Np_new);
+            obj.P_Pl = zeros(6*I_num, 6*I_num, Np_new);
+            obj.P_R  = zeros(3, 3, I_num, Np_new);
+            obj.P_logw = log(1 / Np_new) * ones(1, Np_new);
+            
+            Xl_init = zeros(6*I_num, 1);
+            for i = 1:I_num
+                Xl_init(6*i-5 : 6*i-3) = obj.p(3*i-2 : 3*i);
+                Xl_init(6*i-2 : 6*i)   = obj.v(3*i-2 : 3*i);
+            end
+            
+            P_l_init_cell = repmat({blkdiag((0.1^2)*eye(3), (0.1^2)*eye(3))}, 1, I_num);
+            P_l_init = blkdiag(P_l_init_cell{:});
+            
+            for k = 1:Np_new
+                obj.P_Xl(:, k) = Xl_init;
+                obj.P_Pl(:, :, k) = P_l_init;
+                obj.P_R(:, :, :, k) = obj.R;
+            end
         end
         
         function predict(obj, acc_m, gyro_m)
@@ -143,6 +185,8 @@ classdef CRBPF < handle
         function update(obj, uwb_anc, uwb_rel)
             I_num = obj.Vehicle_num;
             
+            obj.update_count = obj.update_count + 1;
+            
             % --- 1. 动态提取所有有效观测并组装成全局观测向量 ---
             meas_vals = [];
             meas_types = []; % 1: anchor, 2: relative
@@ -177,7 +221,7 @@ classdef CRBPF < handle
             % [核心升级] 渐进式批处理更新 (Progressive Mini-Batch Update)
             % 解决高维测量导致的高斯似然尖锐与粒子权重崩塌问题
             % ==========================================================
-            batch_size = 5; % 黄金批次大小，既保证非线性平缓，又保证EKF矩阵求逆极快
+            batch_size = obj.batch_size; % 批大小由属性控制 (40 = 单历元全量更新)
             
             % 随机打乱测量顺序，消除始终先融合某基站带来的顺序偏置 (Order Bias)
             shuffle_idx = randperm(M);
@@ -269,9 +313,22 @@ classdef CRBPF < handle
                 % 此时优秀的粒子会被复制，并在下一批次测量中继续接受考验
                 if N_eff < obj.neff_ratio * obj.Np
                     if N_eff / obj.Np < 0.1
-                         fprintf('[SEVERE] Particle depletion \n')
+                        obj.severe_count = obj.severe_count + 1;
+                        obj.depletion_streak = obj.depletion_streak + 1;
+                        fprintf('[SEVERE] Particle depletion (N_eff/Np = %.3f, 连续第 %d 次)\n', ...
+                                N_eff / obj.Np, obj.depletion_streak);
+                        if obj.depletion_streak > obj.depletion_streak_limit
+                            error('CRBPF:SevereParticleDepletion', ...
+                                  ['连续 %d 次出现粒子贫化警告 (UWB 更新序号 %d, 累计 %d 次)，' ...
+                                   '已终止本次运行以便调整参数。'], ...
+                                  obj.depletion_streak, obj.update_count, obj.severe_count);
+                        end
+                    else
+                        obj.depletion_streak = 0;
                     end
                     obj.resample_and_roughen(w_norm);
+                else
+                    obj.depletion_streak = 0;
                 end
             end
             
@@ -280,6 +337,8 @@ classdef CRBPF < handle
         end
         
         function resample_and_roughen(obj, w_norm)
+            obj.resample_count = obj.resample_count + 1;
+            
             % A. 确定性系统重采样 (Systematic Resampling)
             c = cumsum(w_norm);
             u = (0 : obj.Np - 1)' / obj.Np + rand() / obj.Np;

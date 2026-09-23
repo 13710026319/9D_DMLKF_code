@@ -64,6 +64,7 @@ for i = 1:Vehicle_num
 end
 
 kf = CRBPF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
+kf.set_particle_count(1500)
 
 % 结果存储空间
 est_p = zeros(N_steps, 3, Vehicle_num);
