@@ -3,9 +3,16 @@
 clc; clear; close all;
 
 %% 1. 测试参数配置
-Vehicle_num = 8;            
+Vehicle_num = 5;            
 Anchor_num = 4;             
 run_flag = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行并覆盖
+save_flag = 0;
+
+% 完全扣除 IMU 零偏 (1.0 为完全补偿)
+bias_comp_ratio = 0.5; 
+
+% [新增] 控制截取数据集的比例 (例如 0.2 表示只跑前 20% 的数据，1.0为全部)
+data_ratio = 0.3;
 
 % 路径配置
 data_dir = 'E:\DMLKF_code\Data';
@@ -13,8 +20,7 @@ res_dir  = 'E:\DMLKF_code\EKF\CEKF\RESULT'; % 指向 CEKF 的结果目录
 if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
-
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D_1.mat', Vehicle_num, Anchor_num));
 res_file  = fullfile(res_dir, sprintf('CEKF_Veh%d_Anc%d.mat', Vehicle_num, Anchor_num));
 
 %% 2. 检查结果文件是否存在 (run_flag 机制)
@@ -32,25 +38,28 @@ end
 load(data_file, 'trajectories', 'anchors', 'IMU_noise_params', 'UWB_noise_params');
 fprintf('数据集加载成功，开始运行 CEKF 算法...\n');
 
-N_steps = length(trajectories.V1.Time_true);
+% [修改] 根据截取比例计算实际运行步数
+N_steps_total = length(trajectories.V1.Time_true);
+N_steps = max(2, round(N_steps_total * data_ratio)); % 计算截断步数(至少保证有2步)
+fprintf('>> 实验设定的数据截取比例: %.1f%%\n', data_ratio * 100);
+fprintf('>> 实际运行步数 / 总步数: %d / %d\n', N_steps, N_steps_total);
+
 dt_imu = trajectories.V1.Time_true(2) - trajectories.V1.Time_true(1);
 
 %% 4. 初始化 CEKF 滤波器
 p0 = zeros(3 * Vehicle_num, 1);
 v0 = zeros(3 * Vehicle_num, 1);
 R0 = zeros(3, 3, Vehicle_num);
-
 for i = 1:Vehicle_num
     v_name = sprintf('V%d', i);
     p0(3*i-2 : 3*i) = [trajectories.(v_name).X_true(1); trajectories.(v_name).Y_true(1); trajectories.(v_name).Z_true(1)];
     v0(3*i-2 : 3*i) = [trajectories.(v_name).Vx_true(1); trajectories.(v_name).Vy_true(1); trajectories.(v_name).Vz_true(1)];
     R0(:, :, i)     = trajectories.(v_name).R_true(:, :, 1);
 end
-
 % 实例化 CEKF (仅此处与 CMLKF 不同)
 kf = CEKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
 
-% 预分配估计结果存储空间
+% 预分配估计结果存储空间 (自动适用截断后的 N_steps)
 est_p = zeros(N_steps, 3, Vehicle_num);
 est_v = zeros(N_steps, 3, Vehicle_num);
 est_R = zeros(3, 3, Vehicle_num, N_steps);
@@ -63,7 +72,6 @@ end
 %% 5. 滤波主循环
 uwb_idx = 2; % UWB 从第2个历元开始融合
 UWB_Time_Vec = trajectories.V1.UWB_Anchor(:, 1);
-
 for k = 2:N_steps
     % --- A. 100Hz 预测过程 (扣除偏置) ---
     acc_m = zeros(3, Vehicle_num);
@@ -71,8 +79,8 @@ for k = 2:N_steps
     for i = 1:Vehicle_num
         v_name = sprintf('V%d', i);
         % 在此处模拟IMU扰动以及一定的偏置累加影响
-        acc_m(:, i)  = trajectories.(v_name).IMU_acc_m(k-1, :)' - 0.5*trajectories.(v_name).IMU_bias_a_true(k-1, :)';
-        gyro_m(:, i) = trajectories.(v_name).IMU_gyro_m(k-1, :)' - 0.5*trajectories.(v_name).IMU_bias_w_true(k-1, :)';
+        acc_m(:, i)  = trajectories.(v_name).IMU_acc_m(k-1, :)' - bias_comp_ratio*trajectories.(v_name).IMU_bias_a_true(k-1, :)';
+        gyro_m(:, i) = trajectories.(v_name).IMU_gyro_m(k-1, :)' - bias_comp_ratio*trajectories.(v_name).IMU_bias_w_true(k-1, :)';
     end
     kf.predict(acc_m, gyro_m);
     
@@ -96,18 +104,28 @@ for k = 2:N_steps
         est_v(k, :, i) = kf.v(3*i-2 : 3*i)';
         est_R(:, :, i, k) = kf.R(:, :, i);
     end
+    
+    % 加入进度打印
+    if mod(k, 2000) == 0
+        fprintf('已处理: %d / %d 步...\n', k, N_steps);
+    end
 end
 
 %% 6. 计算 RMSE
 rmse_p = zeros(Vehicle_num, 1);
 rmse_v = zeros(Vehicle_num, 1);
 rmse_att = zeros(Vehicle_num, 1);
-
 for i = 1:Vehicle_num
     v_name = sprintf('V%d', i);
-    % 取真值
-    true_p = [trajectories.(v_name).X_true, trajectories.(v_name).Y_true, trajectories.(v_name).Z_true];
-    true_v = [trajectories.(v_name).Vx_true, trajectories.(v_name).Vy_true, trajectories.(v_name).Vz_true];
+    
+    % [修改] 截取前 N_steps 的轨迹真值，保证与 est_p 的维度一致
+    true_p = [trajectories.(v_name).X_true(1:N_steps), ...
+              trajectories.(v_name).Y_true(1:N_steps), ...
+              trajectories.(v_name).Z_true(1:N_steps)];
+              
+    true_v = [trajectories.(v_name).Vx_true(1:N_steps), ...
+              trajectories.(v_name).Vy_true(1:N_steps), ...
+              trajectories.(v_name).Vz_true(1:N_steps)];
     
     % 位置和速度 RMSE
     rmse_p(i) = sqrt(mean(sum((est_p(:, :, i) - true_p).^2, 2)));
@@ -124,18 +142,17 @@ for i = 1:Vehicle_num
     end
     rmse_att(i) = sqrt(mean(err_att_seq.^2));
 end
-
 mean_rmse_p = mean(rmse_p);
 mean_rmse_v = mean(rmse_v);
 mean_rmse_att = mean(rmse_att);
 
 %% 7. 保存结果文件并打印
-save(res_file, 'est_p', 'est_v', 'est_R', 'rmse_p', 'rmse_v', 'rmse_att', ...
-               'mean_rmse_p', 'mean_rmse_v', 'mean_rmse_att');
-fprintf('运行完成，结果已保存至: %s\n', res_file);
-
+if save_flag
+    save(res_file, 'est_p', 'est_v', 'est_R', 'rmse_p', 'rmse_v', 'rmse_att', ...
+                   'mean_rmse_p', 'mean_rmse_v', 'mean_rmse_att');
+    fprintf('运行完成，结果已保存至: %s\n', res_file);
+end
 print_results(Vehicle_num, rmse_p, rmse_v, rmse_att, mean_rmse_p, mean_rmse_v, mean_rmse_att);
-
 
 %% ==== 局部打印辅助函数 ====
 function print_results(Vehicle_num, rmse_p, rmse_v, rmse_att, m_p, m_v, m_att)
