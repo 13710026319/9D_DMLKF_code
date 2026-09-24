@@ -58,20 +58,20 @@ classdef CRBPF < handle
             obj.g_vec = [0; 0; -9.81];
             
             % 1. 设置严格的噪声配置
-            obj.IMU_Sigma_a = (0.10)^2 * eye(3);      
-            obj.IMU_Sigma_w = (0.010)^2 * eye(3);     
-            obj.UWB_sigma_anc = 0.075;                  
-            obj.UWB_sigma_rel = 0.075;                  
+            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      
+            obj.IMU_Sigma_w = (0.015)^2 * eye(3);     
+            obj.UWB_sigma_anc = 0.08;                  
+            obj.UWB_sigma_rel = 0.08;                  
             
             % 2. 粒子与抗贫化配置
-            obj.Np = 8000;            
-            obj.neff_ratio = 0.7;     % 重采样门槛
+            obj.Np = 600;            
+            obj.neff_ratio = 0.65;     % 重采样门槛
             obj.rough_coeff = 0.05;    % 重采样后注入噪声的扩散程度
             obj.min_att_jitter = 0.001; % 重采样后注入的抖动下限
             
             % 2b. 批处理与贫化监控配置
-            obj.batch_size = 20;              % 渐进式批处理窗口 (40 = 单历元全量测量)
-            obj.depletion_streak_limit = 4;   % 连续 4 次贫化警告后仍继续则终止本次运行
+            obj.batch_size = 40;              % 渐进式批处理窗口 (40 = 单历元全量测量)
+            obj.depletion_streak_limit = 3;   % 连续 4 次贫化警告后仍继续则终止本次运行
             obj.depletion_streak = 0;
             obj.update_count = 0;
             obj.resample_count = 0;
@@ -315,8 +315,6 @@ classdef CRBPF < handle
                     if N_eff / obj.Np < 0.1
                         obj.severe_count = obj.severe_count + 1;
                         obj.depletion_streak = obj.depletion_streak + 1;
-                        fprintf('[SEVERE] Particle depletion (N_eff/Np = %.3f, 连续第 %d 次)\n', ...
-                                N_eff / obj.Np, obj.depletion_streak);
                         if obj.depletion_streak > obj.depletion_streak_limit
                             error('CRBPF:SevereParticleDepletion', ...
                                   ['连续 %d 次出现粒子贫化警告 (UWB 更新序号 %d, 累计 %d 次)，' ...

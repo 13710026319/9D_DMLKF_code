@@ -3,25 +3,25 @@
 clc; clear; close all;
 
 %% 1. 测试参数与运行配置
-Vehicle_num = 5;            
-Anchor_num  = 4;             
+Vehicle_num = 6;            
+Anchor_num  = 35;             
 run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行并覆盖
 save_flag = 0;
 
 % 故意保留 30% 未知零偏以破坏先验，考验粒子群抗漂移能力 (1.0为完全补偿)
-bias_comp_ratio = 0.5; 
+bias_comp_ratio = 1; 
 
 % 数据集截取比例
-data_ratio  = 0.3;
+data_ratio  = 1;
 
 % 路径配置
-data_dir = 'E:\DMLKF_code\Data';
+data_dir = 'E:\DMLKF_code\Data\C_compare';
 res_dir  = 'E:\DMLKF_code\RBPF\CRBPF\RESULT';
 if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
 
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D_1.mat', Vehicle_num, Anchor_num));
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D_10.mat', Vehicle_num, Anchor_num));
 res_file  = fullfile(res_dir, sprintf('CRBPF_Veh%d_Anc%d.mat', Vehicle_num, Anchor_num));
 
 %% 2. 检查结果文件是否存在
@@ -64,7 +64,7 @@ for i = 1:Vehicle_num
 end
 
 kf = CRBPF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
-kf.set_particle_count(1500)
+
 
 % 结果存储空间
 est_p = zeros(N_steps, 3, Vehicle_num);

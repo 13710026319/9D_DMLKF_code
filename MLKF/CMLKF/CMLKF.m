@@ -38,12 +38,12 @@ classdef CMLKF < handle
             obj.g_vec = [0; 0; -9.81];
             
             % 1. 模拟不可信的先验，将IMU的参数置信度稍调大
-            obj.IMU_Sigma_a = (0.07)^2 * eye(3);      % sigma_na = 0.07
-            obj.IMU_Sigma_w = (0.007)^2 * eye(3);     % sigma_nw = 0.007
-            obj.UWB_sigma_anc = 0.1;                  % sigma_anc = 0.1
-            obj.UWB_sigma_rel = 0.1;                  % sigma_rel = 0.1
+            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      % sigma_na = 0.07
+            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     % sigma_nw = 0.007
+            obj.UWB_sigma_anc = 0.18;                  % sigma_anc = 0.1
+            obj.UWB_sigma_rel = 0.18;                  % sigma_rel = 0.1
             obj.epsilon = 1e-4;
-            obj.max_iter = 10;
+            obj.max_iter = 30;
             obj.max_step = 1; 
 
             % 2. 初始化状态
