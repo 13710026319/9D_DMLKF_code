@@ -64,7 +64,7 @@ classdef CRBPF < handle
             obj.UWB_sigma_rel = 0.08;                  
             
             % 2. 粒子与抗贫化配置
-            obj.Np = 600;            
+            obj.Np = 300;            
             obj.neff_ratio = 0.65;     % 重采样门槛
             obj.rough_coeff = 0.05;    % 重采样后注入噪声的扩散程度
             obj.min_att_jitter = 0.001; % 重采样后注入的抖动下限
