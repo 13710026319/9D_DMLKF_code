@@ -9,7 +9,7 @@ run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新
 save_flag = 0;
 
 % 故意保留 30% 未知零偏以破坏先验，考验粒子群抗漂移能力 (1.0为完全补偿)
-bias_comp_ratio = 1; 
+bias_comp_ratio = 0.6; 
 
 % 数据集截取比例
 data_ratio  = 1;

@@ -3,24 +3,24 @@
 clc; clear; close all;
 
 %% 1. 测试参数配置
-Vehicle_num = 8;            
-Anchor_num = 4;             
+Vehicle_num = 6;            
+Anchor_num = 35;             
 run_flag = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行并覆盖
 save_flag = 0;
 
 % 完全扣除 IMU 零偏 (1.0 为完全补偿)
-bias_comp_ratio = 1; 
+bias_comp_ratio = 0.6; 
 
 % [新增] 控制截取数据集的比例 (例如 0.2 表示只跑前 20% 的数据，1.0为全部)
 data_ratio = 1;
 
 % 路径配置
-data_dir = 'E:\DMLKF_code\Data';
+data_dir = 'E:\DMLKF_code\Data\C_compare';
 res_dir  = 'E:\DMLKF_code\EKF\CEKF\RESULT'; % 指向 CEKF 的结果目录
 if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D_10.mat', Vehicle_num, Anchor_num));
 res_file  = fullfile(res_dir, sprintf('CEKF_Veh%d_Anc%d.mat', Vehicle_num, Anchor_num));
 
 %% 2. 检查结果文件是否存在 (run_flag 机制)
