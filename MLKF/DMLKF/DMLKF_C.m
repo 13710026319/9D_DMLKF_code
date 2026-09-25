@@ -1,6 +1,6 @@
-classdef DMLKF < handle
+classdef DMLKF_C < handle
     % DMLKF - 9D Distributed Maximum Likelihood Kalman Filter
-    % [文档修改版] 结合 change1 理论：
+    % 该算法参数目前用于与V1 集中式GN比较
     %  1) predict(): 按 Eq18-19 整体传播 U_i 上的联合先验协方差 SigmaJ（不再各节点独立传播9x9再拼block-diag）
     %  2) update() 第5部分: 按 Eq46-54 直接对联合精度矩阵求逆重构联合后验协方差（不再用 Schur 补边缘化丢弃互相关）
     %  3) 拓扑 U_i/N_i 全程固定，相关量（W_c, W_global, lambda_2）移至构造函数只计算一次
@@ -22,9 +22,13 @@ classdef DMLKF < handle
         beta_inv 
         max_step 
 
-        % [新增-调参用] 分布式 GN 步长相关可调参数（默认值 = 论文原值，不改变原行为）
-        alpha_scale = 1     % 分布式步长放大系数（1 = Eq33/34 原值）
-        alpha_adaptive = 1  % 1 = 使用 Eq33/34 自适应步长；0 = 固定步长
+        % [固定步长设计] 分布式 GN 步长：构造时按通信拓扑算一次，全程恒定（无自适应、无衰减）
+        %   alpha = ALPHA_SAFETY * (1 - lambda_2) / (1 + sqrt(lambda_2))
+        %   lambda_2 为全局拓扑权重矩阵 W_global 的代数连通度（构造时算一次），
+        %   邻居数 K 的影响已经包含在 lambda_2 里，因此不需要按 K 另外调参。
+        %   自适应步长（Eq 34，按曲率 s_i 动态变化的那一支）只保留在 DMLKF_D 中。
+        ALPHA_SAFETY = 0.3  % 固定步长的缩放系数，0.3通常最优，也可根据实际调整
+        alpha_const         % 依据拓扑结构计算出的固定步长
 
         % [新增-调参用] D-GN 收敛诊断（只记录，不影响计算）
         diag_flag = 1       % 1 = 记录每次 update 的迭代次数与残差
@@ -43,12 +47,12 @@ classdef DMLKF < handle
         U_list      % 每个节点的局部索引集合 U_i = {i} U N_i（ego 恒排在第1位）
         U_set       % U_set(i,c)=true 表示节点i维护变量c
         W_c         % 逐变量 Metropolis-Hastings 权重矩阵
-        W_global    % 全局拓扑权重矩阵（用于 lambda_2 及步长追踪 Eq33）
+        W_global    % 全局拓扑权重矩阵（构造时用于计算代数连通度 lambda_2）
         lambda_2    % 全局通信图的代数连通度（第二大特征值）
     end
     
     methods
-        function obj = DMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, max_iter)
+        function obj = DMLKF_C(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, max_iter, Noise)
             % [文档修改] 新增 V2V_Mask 输入：固定的车间通信邻接矩阵（对称，1=连通）
             % 因为 Ui 全程不变，拓扑只需要在这里解析一次
 
@@ -61,23 +65,24 @@ classdef DMLKF < handle
             obj.anchors = anchors;
             obj.dt_imu = dt_imu;
             obj.g_vec = [0; 0; -9.81];
- 
-            % 以下为VS DEKF时的参数
-            % obj.IMU_Sigma_a = (0.7)^2 * eye(3);      % sigma_na = 0.07
-            % obj.IMU_Sigma_w = (0.07)^2 * eye(3);     % sigma_nw = 0.007
-            % obj.UWB_sigma_anc = 0.1;                  % sigma_anc = 0.1
-            % obj.UWB_sigma_rel = 0.1;                  % sigma_rel = 0.1
-            % 
-            % obj.max_iter = max_iter;   
-            % obj.epsilon  = 1e-4; 
-            % obj.beta_inv = 0.1;  
-            % obj.max_step = 0.2;  
             
             % 以下为VS V1或者集中式GN时的参数
             obj.IMU_Sigma_a = (0.25)^2 * eye(3);      % sigma_na = 0.07
             obj.IMU_Sigma_w = (0.025)^2 * eye(3);     % sigma_nw = 0.007
             obj.UWB_sigma_anc = 0.18;                  % sigma_anc = 0.1
             obj.UWB_sigma_rel = 0.18;                  % sigma_rel = 0.1
+
+            % ==== [可选] 外部噪声参数输入 ====
+            % 用法： N.IMU_Sigma_a = (0.05)^2*eye(3);  N.IMU_Sigma_w = (0.005)^2*eye(3);
+            %        N.UWB_sigma_anc = 0.18;  N.UWB_sigma_rel = 0.18;
+            %        kf = DMLKF_C(V, A, anchors, dt, p0, v0, R0, V2V_Mask, max_iter, N);
+            % 只覆盖传入的字段；不传（或传空）时完全保持上面的默认值，行为与以前一致。
+            if nargin >= 10 && ~isempty(Noise) && isstruct(Noise)
+                if isfield(Noise, 'IMU_Sigma_a'),   obj.IMU_Sigma_a   = Noise.IMU_Sigma_a;   end
+                if isfield(Noise, 'IMU_Sigma_w'),   obj.IMU_Sigma_w   = Noise.IMU_Sigma_w;   end
+                if isfield(Noise, 'UWB_sigma_anc'), obj.UWB_sigma_anc = Noise.UWB_sigma_anc; end
+                if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
+            end
 
             obj.max_iter = max_iter;   
             obj.epsilon  = 1e-4; 
@@ -143,6 +148,12 @@ classdef DMLKF < handle
                 obj.lambda_2 = 0.5;
             end
             obj.lambda_2 = max(0.01, min(0.99, obj.lambda_2));
+
+            % --- 固定分布式步长（构造时算一次，全程恒定）---
+            % 与集中式 GN 对比用的这一支不做自适应步长：直接用论文 Eq33 的静态步长
+            % 乘一个固定安全系数，避免步长过大导致 GN 内循环震荡不收敛。
+            obj.alpha_const = min(1.0, max(0.01, ...
+                obj.ALPHA_SAFETY * (1 - obj.lambda_2) / (1 + sqrt(obj.lambda_2))));
             
             % --- 节点状态与联合协方差初始化 ---
             Sigma_0 = blkdiag((0.1^2)*eye(3), (0.1^2)*eye(3), ((pi/180)^2)*eye(3));
@@ -229,8 +240,6 @@ classdef DMLKF < handle
             N_list = obj.N_list;
             U_set  = obj.U_set;
             W_c    = obj.W_c;
-            W_global = obj.W_global;
-            lambda_2 = obj.lambda_2;
             
             p_prior = zeros(3, I_num);
             for i = 1:I_num, p_prior(:, i) = obj.Nodes{i}.p; end
@@ -253,16 +262,8 @@ classdef DMLKF < handle
                 end
             end
 
-            % --- 分布式步长估计初始化 (Eq 33) ---
-            R_est = zeros(3, 3, I_num);
-            r_prev = zeros(3, 3, I_num);
-            alpha_nodes = zeros(I_num, 1);
-            for i = 1:I_num
-                R_est(:,:,i) = eye(3); 
-                % [新增-调参] 固定步长分支：alpha_scale = 1 时与原文完全一致
-                alpha_nodes(i) = min(1.0, max(0.01, ...
-                    obj.alpha_scale * (1 - lambda_2) / (1 + sqrt(lambda_2))));
-            end
+            % --- 固定分布式步长：构造时按拓扑算好，全程恒定 ---
+            alpha_c = obj.alpha_const;
 
             % --- D-GN 迭代 (Section IV，未改动，与文档一致) ---
             n_clip = 0;   % [新增-调参用] 统计 max_step 截断次数
@@ -310,7 +311,7 @@ classdef DMLKF < handle
                         for j = comm_nodes'
                             sum_s = sum_s + W_c(i, j, c) * S(:, c, j);
                         end
-                        S_next(:, c, i) = sum_s - alpha_nodes(i) * ds(3*c_idx-2 : 3*c_idx);
+                        S_next(:, c, i) = sum_s - alpha_c * ds(3*c_idx-2 : 3*c_idx);
                     end
                 end
                 
@@ -381,52 +382,6 @@ classdef DMLKF < handle
                     end
                 end
                 
-                % --- 分布式理论最优步长更新 (Eq 33 & 34) ---
-                R_est_next = zeros(3, 3, I_num);
-                for i = 1:I_num
-                    if isempty(U_list{i}), continue; end
-                    idx_ego = find(U_list{i} == i);
-                    if isempty(idx_ego), continue; end
-                    
-                    h_local_ego = h_new_all{i}{idx_ego, idx_ego}; 
-                    H_cons_ego = H_next(:, :, idx_ego, idx_ego, i); 
-                    H_cons_reg = H_cons_ego + obj.beta_inv * eye(3);
-                    r_curr = h_local_ego / H_cons_reg; 
-                    
-                    if iter == 1
-                        r_prev(:,:,i) = r_curr; 
-                    end
-                    
-                    sum_R = zeros(3,3);
-                    comm_nodes_global = [i, N_list{i}]; 
-                    for j = comm_nodes_global
-                        sum_R = sum_R + W_global(i, j) * R_est(:,:,j);
-                    end
-                    
-                    R_est_next(:,:,i) = sum_R + r_curr - r_prev(:,:,i);
-                    r_prev(:,:,i) = r_curr; 
-                    
-                    R_i = R_est_next(:,:,i);
-                    try
-                        norm_R = norm(R_i, 2);
-                        norm_invR = norm(inv(R_i + 1e-8*eye(3)), 2);
-                        s_i = 0.5 * (norm_R + 1 / norm_invR);
-                    catch
-                        s_i = 1.0;
-                    end
-                    s_i = max(0.1, min(10, s_i)); 
-                    
-                    alpha_opt = (1 - lambda_2) / (1 + sqrt(s_i * lambda_2));
-                    % [新增-调参] alpha_adaptive = 0 时退化为固定步长
-                    if obj.alpha_adaptive
-                        alpha_nodes(i) = max(0.05, min(1.0, obj.alpha_scale * alpha_opt));
-                    else
-                        alpha_nodes(i) = min(1.0, max(0.01, ...
-                            obj.alpha_scale * (1 - lambda_2) / (1 + sqrt(lambda_2))));
-                    end
-                end
-                R_est = R_est_next;
-
                 err = max(abs(S_next(:) - S(:)));
                 S = S_next; G = G_next; H_mat = H_next;
                 if err < obj.epsilon, break; end

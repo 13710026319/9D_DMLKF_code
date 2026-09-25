@@ -29,7 +29,7 @@ classdef DMLKF_V1 < handle
     end
     
     methods
-        function obj = DMLKF_V1(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0)
+        function obj = DMLKF_V1(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, Noise)
             obj.Vehicle_num = Vehicle_num;
             obj.Anchor_num = Anchor_num;
             obj.anchors = anchors;
@@ -40,10 +40,22 @@ classdef DMLKF_V1 < handle
             obj.IMU_Sigma_w = (0.025)^2 * eye(3);     % sigma_nw = 0.007
             obj.UWB_sigma_anc = 0.18;                  % sigma_anc = 0.1
             obj.UWB_sigma_rel = 0.18;                  % sigma_rel = 0.1
+
+            % ==== [可选] 外部噪声参数输入 ====
+            % 用法： N.IMU_Sigma_a = (0.05)^2*eye(3);  N.IMU_Sigma_w = (0.005)^2*eye(3);
+            %        N.UWB_sigma_anc = 0.18;  N.UWB_sigma_rel = 0.18;
+            %        kf = DMLKF_V1(V, A, anchors, dt, p0, v0, R0, N);
+            % 只覆盖传入的字段；不传（或传空）时完全保持上面的默认值，行为与以前一致。
+            if nargin >= 8 && ~isempty(Noise) && isstruct(Noise)
+                if isfield(Noise, 'IMU_Sigma_a'),   obj.IMU_Sigma_a   = Noise.IMU_Sigma_a;   end
+                if isfield(Noise, 'IMU_Sigma_w'),   obj.IMU_Sigma_w   = Noise.IMU_Sigma_w;   end
+                if isfield(Noise, 'UWB_sigma_anc'), obj.UWB_sigma_anc = Noise.UWB_sigma_anc; end
+                if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
+            end
             
             obj.max_iter = 30;
             obj.epsilon  = 1e-4;
-            obj.beta_inv = 0.1;  
+            obj.beta_inv = 0.01;  
             obj.max_step = 1; 
             
             % [修改点] 初始化：每个节点维护一个全网的 9I x 9I 协方差矩阵视图

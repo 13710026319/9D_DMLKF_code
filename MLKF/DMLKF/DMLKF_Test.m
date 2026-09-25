@@ -1,5 +1,5 @@
 % DMLKF_Test.m 
-% DMLKF (9D 分布式最大似然卡尔曼滤波) - 测试与评价脚本
+% DMLKF_D (9D 分布式最大似然卡尔曼滤波) - 测试与评价脚本
 clc; clear; close all;
 
 %% 1. 测试参数与运行配置
@@ -100,7 +100,7 @@ for i = 1:Vehicle_num
     R0(:, :, i)     = trajectories.(v_name).R_true(:, :, 1); 
 end
 
-kf = DMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask);
+kf = DMLKF_D(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask);
 
 % 结果存储空间
 est_p = zeros(N_steps, 3, Vehicle_num);
