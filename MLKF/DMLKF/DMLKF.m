@@ -21,6 +21,19 @@ classdef DMLKF < handle
         epsilon
         beta_inv 
         max_step 
+
+        % [新增-调参用] 分布式 GN 步长相关可调参数（默认值 = 论文原值，不改变原行为）
+        alpha_scale = 1     % 分布式步长放大系数（1 = Eq33/34 原值）
+        alpha_adaptive = 1  % 1 = 使用 Eq33/34 自适应步长；0 = 固定步长
+
+        % [新增-调参用] D-GN 收敛诊断（只记录，不影响计算）
+        diag_flag = 1       % 1 = 记录每次 update 的迭代次数与残差
+        last_iter = 0
+        last_err  = NaN
+        iter_hist = []      % 每次 update 实际用掉的 D-GN 迭代次数
+        res_hist  = []      % 每次 update 结束时的残差 max|ΔS|
+        last_clip = 0       % [新增-调参用] 最近一次 update 内被 max_step 截断的变量次数
+        clip_hist = []      % [新增-调参用] 每次 update 被 max_step 截断的变量次数
         
         print_flag = 1; 
         Nodes 
@@ -49,10 +62,15 @@ classdef DMLKF < handle
             obj.UWB_sigma_anc = 0.18;                  % sigma_anc = 0.1
             obj.UWB_sigma_rel = 0.18;                  % sigma_rel = 0.1
             
-            obj.max_iter = 40;   
-            obj.epsilon  = 0.01; 
+            % [调参结论 GN_compare] 与集中式 GN(DMLKF_V1: iter30/eps1e-4/beta0.1/step1) 对齐口径：
+            %   max_iter 400 : 分布式一致性带来额外迭代，需要更大迭代预算（实测平均 9~12 次/更新）
+            %   epsilon 1e-4 : 与 V1 同收敛阈值，保证 D-GN 真正收敛（原 1e-2 会让部分更新未收敛就退出）
+            %   beta_inv 0.1 : 保持 LM 阻尼下限不变（调小无收益）
+            %   max_step 1.0 : 与 V1 同值（原 0.1 把位移切成小步，实测只增加迭代次数，不改善精度）
+            obj.max_iter = 400;   
+            obj.epsilon  = 1e-4; 
             obj.beta_inv = 0.1;  
-            obj.max_step = 0.1;  
+            obj.max_step = 1.0;  
             
             I_num = Vehicle_num;
             
@@ -229,10 +247,13 @@ classdef DMLKF < handle
             alpha_nodes = zeros(I_num, 1);
             for i = 1:I_num
                 R_est(:,:,i) = eye(3); 
-                alpha_nodes(i) = (1 - lambda_2) / (1 + sqrt(lambda_2)); 
+                % [新增-调参] 固定步长分支：alpha_scale = 1 时与原文完全一致
+                alpha_nodes(i) = min(1.0, max(0.01, ...
+                    obj.alpha_scale * (1 - lambda_2) / (1 + sqrt(lambda_2))));
             end
 
             % --- D-GN 迭代 (Section IV，未改动，与文档一致) ---
+            n_clip = 0;   % [新增-调参用] 统计 max_step 截断次数
             for iter = 1:obj.max_iter
                 S_next = S; G_next = zeros(size(G)); H_next = zeros(size(H_mat));
                             
@@ -265,6 +286,7 @@ classdef DMLKF < handle
                         step_c = ds(idx_r);
                         if norm(step_c) > obj.max_step
                             ds(idx_r) = step_c * (obj.max_step / norm(step_c));
+                            n_clip = n_clip + 1;
                         end
                     end
                     
@@ -383,13 +405,29 @@ classdef DMLKF < handle
                     s_i = max(0.1, min(10, s_i)); 
                     
                     alpha_opt = (1 - lambda_2) / (1 + sqrt(s_i * lambda_2));
-                    alpha_nodes(i) = max(0.05, min(1.0, alpha_opt)); 
+                    % [新增-调参] alpha_adaptive = 0 时退化为固定步长
+                    if obj.alpha_adaptive
+                        alpha_nodes(i) = max(0.05, min(1.0, obj.alpha_scale * alpha_opt));
+                    else
+                        alpha_nodes(i) = min(1.0, max(0.01, ...
+                            obj.alpha_scale * (1 - lambda_2) / (1 + sqrt(lambda_2))));
+                    end
                 end
                 R_est = R_est_next;
 
                 err = max(abs(S_next(:) - S(:)));
                 S = S_next; G = G_next; H_mat = H_next;
                 if err < obj.epsilon, break; end
+            end
+
+            % [新增-调参] 记录本次 update 的 D-GN 收敛情况
+            if obj.diag_flag
+                obj.last_iter = iter;
+                obj.last_err  = err;
+                obj.iter_hist(end+1, 1) = iter;
+                obj.res_hist(end+1, 1)  = err;
+                obj.last_clip = n_clip;
+                obj.clip_hist(end+1, 1) = n_clip;
             end
             if iter == obj.max_iter && err >= obj.epsilon && obj.print_flag
                 fprintf('警告: 节点未在%d次内收敛, 残差=%.6f\n', obj.max_iter, err);

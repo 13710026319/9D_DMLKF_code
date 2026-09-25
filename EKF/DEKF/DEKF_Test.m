@@ -3,10 +3,10 @@
 clc; clear; close all;
 
 %% 1. 测试参数与运行配置
-Vehicle_num = 15;            
-Anchor_num  = 3;     
-neighbor_k  = 7 ; % [修改] 邻居数 (避免与下方主循环的 k 变量发生冲突)
-run_flag    = 0;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
+Vehicle_num = 8;            
+Anchor_num  = 4;     
+neighbor_k  = 4 ; % [修改] 邻居数 (避免与下方主循环的 k 变量发生冲突)
+run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
 save_flag   = 0;
 
 % 故意保留未知零偏以破坏先验 (1.0为完全补偿，0.7为补偿70%保留30%漂移)
@@ -21,7 +21,7 @@ res_dir  = 'E:\DMLKF_code\EKF\DEKF\RESULT';
 if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D_1.mat', Vehicle_num, Anchor_num));
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
 res_file  = fullfile(res_dir, sprintf('DEKF_Veh%d_Anc%d_20.mat', Vehicle_num, Anchor_num));
 
 %% 2. 检查结果文件是否存在 (run_flag 机制)
@@ -64,26 +64,40 @@ for i = 1:Vehicle_num
     end
 end
 
-% B. 车间掩码 (支持奇数/偶数邻居数的静态环形拓扑)
+% B. 车间掩码 (保证严格对称的静态环形拓扑)
 K_degree = min(neighbor_k, Vehicle_num - 1); 
-V2V_Mask = zeros(Vehicle_num, Vehicle_num);
 
-K_fwd = ceil(K_degree / 2);  % 前面(序号变大方向)分大头
-K_bwd = floor(K_degree / 2); % 后面(序号变小方向)分小头
+% 如果总节点数为奇数，且要求的度数也为奇数，则数学上无法构成正则对称图，直接报错终止
+if mod(Vehicle_num, 2) ~= 0 && mod(K_degree, 2) ~= 0
+    error(['图论限制: 车辆总数(%d)与邻居数(%d)均为奇数，数学上无法构成完全对称的双向测距拓扑！\n' ...
+           ' ---> 解决方案: 请在脚本顶部的测试参数中，将 neighbor_k 修改为偶数，或者将 Vehicle_num 修改为偶数。'], ...
+           Vehicle_num, K_degree);
+end
+
+V2V_Mask = zeros(Vehicle_num, Vehicle_num);
+K_half = floor(K_degree / 2); % 绝对对称的前后连接数
 
 for i = 1:Vehicle_num
-    % 往后(序号变大方向)连 K_fwd 个
-    for d = 1:K_fwd
+    % 1. 绝对对称地连接前后各 K_half 个节点
+    for d = 1:K_half
         idx_forward = mod(i + d - 1, Vehicle_num) + 1;
-        V2V_Mask(i, idx_forward) = 1;
-    end
-    % 往前(序号变小方向)连 K_bwd 个
-    for d = 1:K_bwd
         idx_backward = mod(i - d - 1, Vehicle_num) + 1;
+        V2V_Mask(i, idx_forward) = 1;
         V2V_Mask(i, idx_backward) = 1;
+    end
+    
+    % 2. 处理 K 为奇数的情况：连接圆环正对面的节点 (此时 Vehicle_num 必然为偶数)
+    if mod(K_degree, 2) ~= 0
+        idx_opposite = mod(i + Vehicle_num/2 - 1, Vehicle_num) + 1;
+        V2V_Mask(i, idx_opposite) = 1;
     end
 end
 V2V_Mask(logical(eye(Vehicle_num))) = 0; % 自身对自身设0
+
+% 安全最后校验：确保最终生成的矩阵绝对对称
+if ~isequal(V2V_Mask, V2V_Mask')
+    error('V2V_Mask 矩阵非对称，请检查拓扑生成逻辑！');
+end
 
 %% 5. 初始化 DEKF 滤波器 (使用列向量锁定避免维度崩溃)
 p0 = zeros(3 * Vehicle_num, 1);
