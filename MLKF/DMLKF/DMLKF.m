@@ -44,10 +44,10 @@ classdef DMLKF < handle
             obj.dt_imu = dt_imu;
             obj.g_vec = [0; 0; -9.81];
             
-            obj.IMU_Sigma_a = (0.07)^2 * eye(3);
-            obj.IMU_Sigma_w = (0.007)^2 * eye(3);
-            obj.UWB_sigma_anc = 0.1;
-            obj.UWB_sigma_rel = 0.1;
+            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      % sigma_na = 0.07
+            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     % sigma_nw = 0.007
+            obj.UWB_sigma_anc = 0.18;                  % sigma_anc = 0.1
+            obj.UWB_sigma_rel = 0.18;                  % sigma_rel = 0.1
             
             obj.max_iter = 40;   
             obj.epsilon  = 0.01; 

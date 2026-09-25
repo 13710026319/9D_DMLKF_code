@@ -4,9 +4,9 @@
 clc; clear; close all;
 
 %% 1. 实验参数与运行配置
-Vehicle_num = 15;            
+Vehicle_num = 8;            
 Anchor_num  = 4;             
-K_test_list = 2:14; % 邻居数
+K_test_list = 2:7; % 邻居数
 
 % 保留一定比例的零偏误差以破坏 IMU 先验，凸显测距优化优势 (1.0为完全补偿, 0.7为保留30%漂移)
 bias_comp_ratio = 1; 
@@ -18,7 +18,7 @@ data_ratio  = 1;
 
 % 路径配置
 data_dir = 'E:\DMLKF_code\Data';
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D_1.mat', Vehicle_num, Anchor_num));
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
 
 %% 2. 加载数据集与截断处理
 if ~exist(data_file, 'file')
