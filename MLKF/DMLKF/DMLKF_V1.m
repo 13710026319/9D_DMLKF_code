@@ -1,8 +1,12 @@
 classdef DMLKF_V1 < handle
-    % DMLKF_V1 - 预言家下界版 (Oracle Bound) 分布式最大似然卡尔曼滤波
-    % 核心验证目标：隔离 D-GN 优化误差。
-    % 机制：使用上帝视角的集中式 GN 解出完美的全局 MLE 状态和联合海森矩阵；
-    % 随后每个节点按分布式拓扑提取属于自己 U_i 的子矩阵，执行局部分布式舒尔补融合。
+    % DMLKF_V1 - Change 1 理论验证版 (Oracle Bound)
+    % 核心验证目标：隔离 D-GN 优化误差，专注于滤波框架中"协方差保守次优融合"的理论验证。
+    % 机制：
+    % 1. 优化步：使用上帝视角的集中式 GN 解出完美的全局 MLE 状态和联合海森矩阵。
+    % 2. 预测步：构建全局 A 和 Q，自然传递节点与邻居之间的交叉协方差。
+    % 3. 更新步：彻底抛弃舒尔补边缘化！直接提取包含自身的邻居的局部协方差块，
+    %    执行 Change 1 证明的保守次优融合：Sigma = inv( inv(Sigma_prior) + Lambda )，
+    %    全连通拓扑下，该架构在数学上 100% 退化为集中式最优 Information Filter。
     
     properties
         Vehicle_num
@@ -32,31 +36,38 @@ classdef DMLKF_V1 < handle
             obj.dt_imu = dt_imu;
             obj.g_vec = [0; 0; -9.81];
             
-            obj.IMU_Sigma_a = (0.07)^2 * eye(3);
-            obj.IMU_Sigma_w = (0.007)^2 * eye(3);
-            obj.UWB_sigma_anc = 0.1;
-            obj.UWB_sigma_rel = 0.1;
+            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      % sigma_na = 0.07
+            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     % sigma_nw = 0.007
+            obj.UWB_sigma_anc = 0.18;                  % sigma_anc = 0.1
+            obj.UWB_sigma_rel = 0.18;                  % sigma_rel = 0.1
             
-            obj.max_iter = 10;
+            obj.max_iter = 30;
             obj.epsilon  = 1e-4;
             obj.beta_inv = 0.1;  
             obj.max_step = 1; 
             
-            Sigma_0 = blkdiag((0.1^2)*eye(3), (0.1^2)*eye(3), ((pi/180)^2)*eye(3));
+            % [修改点] 初始化：每个节点维护一个全网的 9I x 9I 协方差矩阵视图
+            Sigma_0_blk = blkdiag((0.1^2)*eye(3), (0.1^2)*eye(3), ((pi/180)^2)*eye(3));
+            Sigma_0_full = kron(eye(Vehicle_num), Sigma_0_blk);
+            
             obj.Nodes = cell(Vehicle_num, 1);
             for i = 1:Vehicle_num
                 obj.Nodes{i}.p = p0(3*i-2 : 3*i);
                 obj.Nodes{i}.v = v0(3*i-2 : 3*i);
                 obj.Nodes{i}.R = R0(:, :, i);
-                obj.Nodes{i}.Sigma = Sigma_0;
+                obj.Nodes{i}.Sigma_full = Sigma_0_full; % 本地缓存的包含交叉协方差的视图
             end
         end
         
         function predict(obj, acc_m, gyro_m)
-            % 独立执行本地 IMU 预测步
             tau = obj.dt_imu;
             I3 = eye(3); O3 = zeros(3);
             Q_local = blkdiag(obj.IMU_Sigma_a, obj.IMU_Sigma_w);
+            
+            % [修改点] 预测步：构建全局动力学矩阵 A_global 和 Q_global
+            % 目的：让节点间的"交叉协方差"能够按照真实的物理模型进行自然传播
+            A_global = zeros(9*obj.Vehicle_num, 9*obj.Vehicle_num);
+            Q_global = zeros(9*obj.Vehicle_num, 9*obj.Vehicle_num);
             
             for i = 1:obj.Vehicle_num
                 ai = acc_m(:, i);
@@ -79,28 +90,34 @@ classdef DMLKF_V1 < handle
                    
                 Q_i = W_i * Q_local * W_i';
                 
+                idx_9D = 9*i-8 : 9*i;
+                A_global(idx_9D, idx_9D) = A_i;
+                Q_global(idx_9D, idx_9D) = Q_i;
+                
                 obj.Nodes{i}.p = pi_new;
                 obj.Nodes{i}.v = vi_new;
                 obj.Nodes{i}.R = Ri_new;
-                Sigma_new = A_i * obj.Nodes{i}.Sigma * A_i' + Q_i;
-                obj.Nodes{i}.Sigma = (Sigma_new + Sigma_new') / 2;
+            end
+            
+            % 执行全局协方差预测，完美保留非对角线上的交叉相关性
+            for i = 1:obj.Vehicle_num
+                Sigma_pred = A_global * obj.Nodes{i}.Sigma_full * A_global' + Q_global;
+                obj.Nodes{i}.Sigma_full = (Sigma_pred + Sigma_pred') / 2;
             end
         end
         
         function update(obj, uwb_anc, uwb_rel)
             I_num = obj.Vehicle_num;
             
-            % --- 0. 冻结全局先验状态与协方差缓存 (防止 Data Incest) ---
+            % --- 0. 冻结全局先验状态 ---
             p_prior = zeros(3, I_num);
-            Sigma_prior_cache = cell(I_num, 1);
             for i = 1:I_num
                 p_prior(:, i) = obj.Nodes{i}.p;
-                Sigma_prior_cache{i} = obj.Nodes{i}.Sigma;
             end
             
             % ==========================================================
-            % 1. 上帝视角的完美集中式 MLE 优化 (Oracle Global GN)
-            % 完全放弃先验，求解无任何分布式截断误差的最优解与全局海森
+            % 1. 上帝视角的完美集中式 MLE 优化 (保持不变)
+            % 获取无优化近似误差的完美全局海森 H_glob_final 与状态 p_MLE_perfect
             % ==========================================================
             p_iter = p_prior;
             H_glob_final = zeros(3*I_num, 3*I_num);
@@ -122,7 +139,7 @@ classdef DMLKF_V1 < handle
                             
                             sig2 = obj.UWB_sigma_anc^2;
                             grad = (1/sig2) * (1 - z/d) * delta;
-                            hess = (1/sig2) * (u_vec * u_vec'); % GN近似
+                            hess = (1/sig2) * (u_vec * u_vec'); 
                             
                             idx_i = 3*i-2 : 3*i;
                             g_glob(idx_i) = g_glob(idx_i) + grad;
@@ -159,13 +176,11 @@ classdef DMLKF_V1 < handle
                 end
                 
                 H_glob = (H_glob + H_glob') / 2;
-                H_glob_final = H_glob; % 缓存最后一次求出的全局完美海森
+                H_glob_final = H_glob; 
                 
-                % Levenberg-Marquardt LM 下降
                 H_reg = H_glob + obj.beta_inv * eye(3*I_num);
                 dp_glob = H_reg \ g_glob;
                 
-                % 步长防护与防爆
                 if any(isnan(dp_glob(:))) || any(isinf(dp_glob(:))), dp_glob = zeros(3*I_num, 1); end
                 for i = 1:I_num
                     idx_i = 3*i-2 : 3*i;
@@ -176,15 +191,12 @@ classdef DMLKF_V1 < handle
                 end
                 
                 p_iter = p_iter - reshape(dp_glob, 3, I_num);
-                
-                if max(abs(dp_glob)) < obj.epsilon
-                    break;
-                end
+                if max(abs(dp_glob)) < obj.epsilon, break; end
             end
-            p_MLE_perfect = p_iter; % 获取到预言家视角的完美坐标解
+            p_MLE_perfect = p_iter; 
             
             % ==========================================================
-            % 2. 模拟分布式融合架构 (局部完美提取 + 块对角先验 + 舒尔补)
+            % 2. 模拟 Change 1 分布式融合架构 (保留全联通交叉相关性)
             % ==========================================================
             for i = 1:I_num
                 % 构建节点 i 的局部子网络 U_i
@@ -195,74 +207,61 @@ classdef DMLKF_V1 < handle
                 
                 if Ui_len == 0, continue; end
                 
-                % A. 从完美全局结果中抠出属于 U_i 的局部状态误差与联合海森阵
-                Lambda_3D = zeros(3*Ui_len, 3*Ui_len);
-                s_dn_vec = zeros(3*Ui_len, 1);
-                
+                % 获取 U_i 对应在全局矩阵中的 9D 和 3D 索引
+                idx_9D_Ui = zeros(1, 9*Ui_len);
+                idx_3D_Ui = zeros(1, 3*Ui_len);
                 for c_idx = 1:Ui_len
                     c = U_i(c_idx);
-                    % 从集中式 MLE 解中提取该节点的完美局部误差
-                    s_dn_vec(3*c_idx-2 : 3*c_idx) = p_MLE_perfect(:, c) - p_prior(:, c);
-                    for d_idx = 1:Ui_len
-                        d = U_i(d_idx);
-                        % 从集中式海森中抠出属于 U_i 的主子矩阵
-                        Lambda_3D(3*c_idx-2:3*c_idx, 3*d_idx-2:3*d_idx) = H_glob_final(3*c-2:3*c, 3*d-2:3*d);
-                    end
+                    idx_9D_Ui(9*c_idx-8 : 9*c_idx) = 9*c-8 : 9*c;
+                    idx_3D_Ui(3*c_idx-2 : 3*c_idx) = 3*c-2 : 3*c;
                 end
+                
+                % A. 从完美集中式海森中，精准抠出属于 U_i 的局部海森阵
+                % 由于提取顺序服从 U_i，ego 节点 i 必然位于矩阵左上角！
+                Lambda_3D = H_glob_final(idx_3D_Ui, idx_3D_Ui);
                 Lambda_3D = (Lambda_3D + Lambda_3D') / 2;
                 
-                % 保证局部提取的海森阵半正定
                 [V_lam, D_lam] = eig(Lambda_3D);
                 eig_lam = diag(D_lam); eig_lam(eig_lam < 0) = 0;
                 Lambda_3D = V_lam * diag(eig_lam) * V_lam';
                 
-                % B. 提升至 9D 空间
+                % 从集中式 MLE 解中提取该局部的完美误差向量
+                s_dn_vec = zeros(3*Ui_len, 1);
+                for c_idx = 1:Ui_len
+                    c = U_i(c_idx);
+                    s_dn_vec(3*c_idx-2 : 3*c_idx) = p_MLE_perfect(:, c) - p_prior(:, c);
+                end
+                
+                % B. 将 3D 位置信息提升至 9D 联合空间 (用 0 填充速度和姿态块)
                 Pi_mat = kron(eye(Ui_len), [eye(3), zeros(3,3), zeros(3,3)]);
                 Lambda_9D = Pi_mat' * Lambda_3D * Pi_mat;
                 lambda_9D = Pi_mat' * (Lambda_3D * s_dn_vec);
                 
-                % C. 构建块对角分布式的“残缺先验” (导致其弱于 CMLKF 的根源)
-                Gamma_prior = zeros(9*Ui_len, 9*Ui_len);
-                for c_idx = 1:Ui_len
-                    c = U_i(c_idx);
-                    Sigma_c = (Sigma_prior_cache{c} + Sigma_prior_cache{c}') / 2 + 1e-12 * eye(9);
-                    Gamma_prior(9*c_idx-8 : 9*c_idx, 9*c_idx-8 : 9*c_idx) = eye(9) / Sigma_c;
-                end
+                % C. [Change 1 核心] 直接从本地全局视图提取包含所有交叉协方差的真实先验块
+                % 这彻底抛弃了导致发散的完全对角阵假设 (Block-diagonal Prior)
+                Sigma_prior_Ui = obj.Nodes{i}.Sigma_full(idx_9D_Ui, idx_9D_Ui);
+                Sigma_prior_Ui = (Sigma_prior_Ui + Sigma_prior_Ui') / 2 + 1e-12 * eye(9*Ui_len);
                 
-                % D. 局部信息融合
-                Gamma_post = Gamma_prior + Lambda_9D;
-                gamma_post = lambda_9D; 
+                % D. [Change 1 核心] 执行次优融合 (Suboptimal Fusion)
+                % 抛弃舒尔补边缘化！直接使用完整局部逆矩阵相加。
+                % 若拓扑为全连接(U_i 包含所有人)，此处数学公式严格等于集中式 Information Filter
+                Gamma_prior_Ui = eye(size(Sigma_prior_Ui)) / Sigma_prior_Ui;
+                Gamma_post_Ui  = Gamma_prior_Ui + Lambda_9D;
+                Gamma_post_Ui  = (Gamma_post_Ui + Gamma_post_Ui') / 2 + 1e-10 * eye(9*Ui_len);
                 
-                % E. 舒尔补边缘化，提纯 ego 节点
-                Gamma_ii = Gamma_post(1:9, 1:9);
-                Gamma_iN = Gamma_post(1:9, 10:end);
-                Gamma_Ni = Gamma_post(10:end, 1:9);
-                Gamma_NN = Gamma_post(10:end, 10:end);
+                Sigma_post_Ui = eye(size(Gamma_post_Ui)) / Gamma_post_Ui;
+                Sigma_post_Ui = (Sigma_post_Ui + Sigma_post_Ui') / 2;
                 
-                gamma_i = gamma_post(1:9);
-                gamma_N = gamma_post(10:end);
+                theta_Ui = Gamma_post_Ui \ lambda_9D;
                 
-                if isempty(Gamma_NN)
-                    Gamma_ego = Gamma_ii;
-                    gamma_ego = gamma_i;
-                else
-                    Gamma_NN_reg = Gamma_NN + 1e-8 * eye(size(Gamma_NN));
-                    Gamma_ego = Gamma_ii - Gamma_iN * (Gamma_NN_reg \ Gamma_Ni);
-                    gamma_ego = gamma_i - Gamma_iN * (Gamma_NN_reg \ gamma_N);
-                end
-                
-                Gamma_ego = (Gamma_ego + Gamma_ego') / 2 + 1e-10 * eye(9);
-                Sigma_ego = eye(9) / Gamma_ego;
-                Sigma_ego = (Sigma_ego + Sigma_ego') / 2;
-                
-                theta_ego = Gamma_ego \ gamma_ego;
+                % E. 状态流形收回 (仅提取左上角属于 ego 节点 i 的那 9 维更新量)
+                theta_ego = theta_Ui(1:9);
                 
                 if any(isnan(theta_ego)) || any(isinf(theta_ego))
                     theta_ego = zeros(9, 1);
-                    Sigma_ego = Sigma_prior_cache{i}; 
+                    Sigma_post_Ui = Sigma_prior_Ui; % 异常回退保护
                 end
                 
-                % F. 状态流形收回
                 dp   = theta_ego(1:3);
                 dv   = theta_ego(4:6);
                 dphi = theta_ego(7:9);
@@ -272,7 +271,11 @@ classdef DMLKF_V1 < handle
                 R_new = obj.Nodes{i}.R * obj.exp_SO3(dphi);
                 [U, ~, V] = svd(R_new);
                 obj.Nodes{i}.R = U * V';
-                obj.Nodes{i}.Sigma = Sigma_ego;
+                
+                % F. [Change 1 核心] 更新本地的世界观缓存
+                % 将融合后的完整块(包含保留的交叉协方差)写回本地全局视图，
+                % 这就是"局部认知不一致"发生的根源(节点互相写不同块)，但完全保证了数学上的保守性。
+                obj.Nodes{i}.Sigma_full(idx_9D_Ui, idx_9D_Ui) = Sigma_post_Ui;
             end
         end
         
