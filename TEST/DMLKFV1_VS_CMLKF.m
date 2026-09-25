@@ -1,12 +1,12 @@
-% DMLKF_VS_CMLKF.m
+% DMLKFV1_VS_CMLKF.m
 % 集中式 CMLKF 与 分布式 DMLKF 对比测试脚本
 % 验证目的：在全基站观测下，DMLKF 随车间邻居数增加，逐渐逼近 CMLKF (理论最优下界)
 clc; clear; close all;
 
 %% 1. 实验参数与运行配置
-Vehicle_num = 8;            
+Vehicle_num = 6;            
 Anchor_num  = 4;             
-K_test_list = 2:7; % 邻居数
+K_test_list = 2:5; % 邻居数
 
 % 保留一定比例的零偏误差以破坏 IMU 先验，凸显测距优化优势 (1.0为完全补偿, 0.7为保留30%漂移)
 bias_comp_ratio = 1; 

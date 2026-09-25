@@ -1,6 +1,6 @@
-classdef DMLKF < handle
+classdef DMLKF_D < handle
     % DMLKF - 9D Distributed Maximum Likelihood Kalman Filter
-    % [文档修改版] 结合 change1 理论：
+    % 该算法参数目前仅用于VS DEKF
     %  1) predict(): 按 Eq18-19 整体传播 U_i 上的联合先验协方差 SigmaJ（不再各节点独立传播9x9再拼block-diag）
     %  2) update() 第5部分: 按 Eq46-54 直接对联合精度矩阵求逆重构联合后验协方差（不再用 Schur 补边缘化丢弃互相关）
     %  3) 拓扑 U_i/N_i 全程固定，相关量（W_c, W_global, lambda_2）移至构造函数只计算一次
@@ -21,19 +21,6 @@ classdef DMLKF < handle
         epsilon
         beta_inv 
         max_step 
-
-        % [新增-调参用] 分布式 GN 步长相关可调参数（默认值 = 论文原值，不改变原行为）
-        alpha_scale = 1     % 分布式步长放大系数（1 = Eq33/34 原值）
-        alpha_adaptive = 1  % 1 = 使用 Eq33/34 自适应步长；0 = 固定步长
-
-        % [新增-调参用] D-GN 收敛诊断（只记录，不影响计算）
-        diag_flag = 1       % 1 = 记录每次 update 的迭代次数与残差
-        last_iter = 0
-        last_err  = NaN
-        iter_hist = []      % 每次 update 实际用掉的 D-GN 迭代次数
-        res_hist  = []      % 每次 update 结束时的残差 max|ΔS|
-        last_clip = 0       % [新增-调参用] 最近一次 update 内被 max_step 截断的变量次数
-        clip_hist = []      % [新增-调参用] 每次 update 被 max_step 截断的变量次数
         
         print_flag = 1; 
         Nodes 
@@ -48,42 +35,25 @@ classdef DMLKF < handle
     end
     
     methods
-        function obj = DMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, max_iter)
+        function obj = DMLKF_D(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask)
             % [文档修改] 新增 V2V_Mask 输入：固定的车间通信邻接矩阵（对称，1=连通）
             % 因为 Ui 全程不变，拓扑只需要在这里解析一次
-
-            if nargin < 9 || isempty(max_iter)
-                max_iter = 200;
-            end
-
             obj.Vehicle_num = Vehicle_num;
             obj.Anchor_num = Anchor_num;
             obj.anchors = anchors;
             obj.dt_imu = dt_imu;
             obj.g_vec = [0; 0; -9.81];
- 
-            % 以下为VS DEKF时的参数
-            % obj.IMU_Sigma_a = (0.7)^2 * eye(3);      % sigma_na = 0.07
-            % obj.IMU_Sigma_w = (0.07)^2 * eye(3);     % sigma_nw = 0.007
-            % obj.UWB_sigma_anc = 0.1;                  % sigma_anc = 0.1
-            % obj.UWB_sigma_rel = 0.1;                  % sigma_rel = 0.1
-            % 
-            % obj.max_iter = max_iter;   
-            % obj.epsilon  = 1e-4; 
-            % obj.beta_inv = 0.1;  
-            % obj.max_step = 0.2;  
             
-            % 以下为VS V1或者集中式GN时的参数
-            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      % sigma_na = 0.07
-            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     % sigma_nw = 0.007
-            obj.UWB_sigma_anc = 0.18;                  % sigma_anc = 0.1
-            obj.UWB_sigma_rel = 0.18;                  % sigma_rel = 0.1
-
-            obj.max_iter = max_iter;   
-            obj.epsilon  = 1e-4; 
+            obj.IMU_Sigma_a = (0.07)^2 * eye(3);
+            obj.IMU_Sigma_w = (0.007)^2 * eye(3);
+            obj.UWB_sigma_anc = 0.1;
+            obj.UWB_sigma_rel = 0.1;
+            
+            obj.max_iter = 40;   
+            obj.epsilon  = 0.01; 
             obj.beta_inv = 0.1;  
-            obj.max_step = 1;  
-
+            obj.max_step = 0.1;  
+            
             I_num = Vehicle_num;
             
             % --- [固定拓扑解析] 只在构造时做一次 ---
@@ -259,13 +229,10 @@ classdef DMLKF < handle
             alpha_nodes = zeros(I_num, 1);
             for i = 1:I_num
                 R_est(:,:,i) = eye(3); 
-                % [新增-调参] 固定步长分支：alpha_scale = 1 时与原文完全一致
-                alpha_nodes(i) = min(1.0, max(0.01, ...
-                    obj.alpha_scale * (1 - lambda_2) / (1 + sqrt(lambda_2))));
+                alpha_nodes(i) = (1 - lambda_2) / (1 + sqrt(lambda_2)); 
             end
 
             % --- D-GN 迭代 (Section IV，未改动，与文档一致) ---
-            n_clip = 0;   % [新增-调参用] 统计 max_step 截断次数
             for iter = 1:obj.max_iter
                 S_next = S; G_next = zeros(size(G)); H_next = zeros(size(H_mat));
                             
@@ -298,7 +265,6 @@ classdef DMLKF < handle
                         step_c = ds(idx_r);
                         if norm(step_c) > obj.max_step
                             ds(idx_r) = step_c * (obj.max_step / norm(step_c));
-                            n_clip = n_clip + 1;
                         end
                     end
                     
@@ -417,29 +383,13 @@ classdef DMLKF < handle
                     s_i = max(0.1, min(10, s_i)); 
                     
                     alpha_opt = (1 - lambda_2) / (1 + sqrt(s_i * lambda_2));
-                    % [新增-调参] alpha_adaptive = 0 时退化为固定步长
-                    if obj.alpha_adaptive
-                        alpha_nodes(i) = max(0.05, min(1.0, obj.alpha_scale * alpha_opt));
-                    else
-                        alpha_nodes(i) = min(1.0, max(0.01, ...
-                            obj.alpha_scale * (1 - lambda_2) / (1 + sqrt(lambda_2))));
-                    end
+                    alpha_nodes(i) = max(0.05, min(1.0, alpha_opt)); 
                 end
                 R_est = R_est_next;
 
                 err = max(abs(S_next(:) - S(:)));
                 S = S_next; G = G_next; H_mat = H_next;
                 if err < obj.epsilon, break; end
-            end
-
-            % [新增-调参] 记录本次 update 的 D-GN 收敛情况
-            if obj.diag_flag
-                obj.last_iter = iter;
-                obj.last_err  = err;
-                obj.iter_hist(end+1, 1) = iter;
-                obj.res_hist(end+1, 1)  = err;
-                obj.last_clip = n_clip;
-                obj.clip_hist(end+1, 1) = n_clip;
             end
             if iter == obj.max_iter && err >= obj.epsilon && obj.print_flag
                 fprintf('警告: 节点未在%d次内收敛, 残差=%.6f\n', obj.max_iter, err);
