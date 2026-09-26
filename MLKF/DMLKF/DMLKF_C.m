@@ -1,9 +1,6 @@
 classdef DMLKF_C < handle
     % DMLKF - 9D Distributed Maximum Likelihood Kalman Filter
-    % 该算法参数目前用于与V1 集中式GN比较
-    %  1) predict(): 按 Eq18-19 整体传播 U_i 上的联合先验协方差 SigmaJ（不再各节点独立传播9x9再拼block-diag）
-    %  2) update() 第5部分: 按 Eq46-54 直接对联合精度矩阵求逆重构联合后验协方差（不再用 Schur 补边缘化丢弃互相关）
-    %  3) 拓扑 U_i/N_i 全程固定，相关量（W_c, W_global, lambda_2）移至构造函数只计算一次
+    % 使用D-GN，后缀_C表示该算法是用于与集中式GN (CMLKF,DMLKF_V1) 比较
     
     properties
         Vehicle_num

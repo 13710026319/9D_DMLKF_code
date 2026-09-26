@@ -20,14 +20,14 @@
 	% ==================================================
 	% 保存路径
 	save_dir = 'E:\DMLKF_code\TEST\GN_compare\Data'; 
-	trajectories_mat_name = sprintf('Trj_Veh%d_Anc%d_pure.mat', Vehicle_num, Anchor_num);
+	trajectories_mat_name = sprintf('Trj_Veh%d_Anc%d_subpure_1.mat', Vehicle_num, Anchor_num);
 	% 噪声参数
 	IMU_noise_params.sigma_na = 0.05;      
 	IMU_noise_params.sigma_nw = 0.005;     
 	IMU_noise_params.sigma_ba = 0.005;     
 	IMU_noise_params.sigma_bw = 0.0005;    
-	UWB_noise_params.sigma_anc = 0.1;     
-	UWB_noise_params.sigma_rel = 0.1;  
+	UWB_noise_params.sigma_anc = 0.01;     
+	UWB_noise_params.sigma_rel = 0.01;  
 	%% 2. 环境与真值轨迹生成 (调用外部 env_setup.m)
 	[trajectories, anchors] = env_setup(Vehicle_num, Anchor_num, N_steps, dt_imu, t_end);
 	%% 3. 生成含有零偏与白噪声的 100Hz 3D IMU 测量信号
