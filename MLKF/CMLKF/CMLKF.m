@@ -1,5 +1,6 @@
 classdef CMLKF < handle
     % CMLKF - 集中式最大似然卡尔曼滤波器 (Centralized Maximum Likelihood Kalman Filter)
+    % 使用集中式高斯牛顿优化
     % 状态维度：9D x I（纯SO3姿态3、位置3、速度3，无偏置估计）
     % 对应 PDF 参考方程进行严格代码映射，具备高保真李群运算和数值稳定处理
     
@@ -27,10 +28,15 @@ classdef CMLKF < handle
         Pi_mat            % 投影选择矩阵 \pi (3I x 9I)
         max_step 
         beta_inv          % LM 阻尼系数 (默认 1e-2，与 DMLKF_V1 的 beta_inv 对齐)
+
+        is_GN             % 是否为高斯牛顿，1为C-GN, 0为C-N
     end
     
     methods
         function obj = CMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, Noise)
+            % 优化函数是否为GN
+            obj.is_GN = 1;
+
             % 构造函数：初始化系统维度、参数与初始状态
             obj.Vehicle_num = Vehicle_num;
             obj.Anchor_num = Anchor_num;
@@ -58,7 +64,7 @@ classdef CMLKF < handle
             obj.epsilon = 1e-4;
             obj.max_iter = 40;
             obj.max_step = Inf; 
-            obj.beta_inv = 50;   
+            obj.beta_inv = 30;   
 
             % 2. 初始化状态
             % p0, v0 应为 3I x 1 列向量；R0 应为 3 x 3 x I 矩阵
@@ -141,18 +147,23 @@ classdef CMLKF < handle
             p_prior = obj.p;       % 记录预测的先验位置 (p_{t+1|t})
             p_iter = p_prior;      % 迭代优化初始值 p^{(0)}
             
-            % ==== 1. 迭代最大似然优化 (Iterative ML Optimization - Eq 39~44) ====
+            % ==== 1. 迭代最大似然优化 (Iterative ML Optimization) ====
             for iter = 1:obj.max_iter
                 y_meas = [];       % 实际观测向量 y_{t+1}
                 y_pred = [];       % 预测观测向量 h(p^{(l)})
                 H_l = [];          % 观测雅可比矩阵 H^{(l)}
                 R_uwb_diag = [];   % 观测噪声对角元素
                 
-                % 动态提取有效观测并构建雅可比
+                % [条件分配]: 若为牛顿法，则分配二阶导数海森补偿矩阵
+                if ~obj.is_GN
+                    H_second_order = zeros(3 * obj.Vehicle_num, 3 * obj.Vehicle_num);
+                end
+                
+                % 动态提取有效观测并构建雅可比/海森矩阵
                 for i = 1:obj.Vehicle_num
                     p_i = p_iter(3*i-2 : 3*i);
                     
-                    % (1) 基站测距观测 (Eq 33, 41)
+                    % (1) 基站测距观测
                     for k = 1:obj.Anchor_num
                         meas = uwb_anc(i, k);
                         if ~isnan(meas)
@@ -166,13 +177,21 @@ classdef CMLKF < handle
                             
                             H_row = zeros(1, 3 * obj.Vehicle_num);
                             if dist > 1e-4
-                                H_row(3*i-2 : 3*i) = (diff / dist)';
+                                u_ik = diff / dist;
+                                H_row(3*i-2 : 3*i) = u_ik';
+                                
+                                % [如果为 N]: 计算基站观测的二阶导数补偿
+                                if ~obj.is_GN
+                                    hess_2nd = (1 / obj.UWB_sigma_anc^2) * (1 - meas/dist) * (eye(3) - u_ik * u_ik');
+                                    idx_i = 3*i-2 : 3*i;
+                                    H_second_order(idx_i, idx_i) = H_second_order(idx_i, idx_i) + hess_2nd;
+                                end
                             end
                             H_l = [H_l; H_row];
                         end
                     end
                     
-                    % (2) 相对测距观测 (Eq 34, 42)
+                    % (2) 相对测距观测
                     for j = 1:obj.Vehicle_num
                         if i ~= j
                             meas = uwb_rel(i, j);
@@ -190,6 +209,18 @@ classdef CMLKF < handle
                                     u_ij = diff / dist;
                                     H_row(3*i-2 : 3*i) = u_ij';
                                     H_row(3*j-2 : 3*j) = -u_ij';
+                                    
+                                    % [如果为 N]: 计算相对观测的二阶导数补偿 (ii, jj, ij, ji)
+                                    if ~obj.is_GN
+                                        hess_2nd = (1 / obj.UWB_sigma_rel^2) * (1 - meas/dist) * (eye(3) - u_ij * u_ij');
+                                        idx_i = 3*i-2 : 3*i;
+                                        idx_j = 3*j-2 : 3*j;
+                                        
+                                        H_second_order(idx_i, idx_i) = H_second_order(idx_i, idx_i) + hess_2nd;
+                                        H_second_order(idx_j, idx_j) = H_second_order(idx_j, idx_j) + hess_2nd;
+                                        H_second_order(idx_i, idx_j) = H_second_order(idx_i, idx_j) - hess_2nd;
+                                        H_second_order(idx_j, idx_i) = H_second_order(idx_j, idx_i) - hess_2nd;
+                                    end
                                 end
                                 H_l = [H_l; H_row];
                             end
@@ -203,23 +234,37 @@ classdef CMLKF < handle
                 end
                 
                 r_l = y_meas - y_pred;
-                % 使用稀疏对角阵以加速运算
                 R_UWB_inv = spdiags(1 ./ R_uwb_diag, 0, length(y_meas), length(y_meas));
                 
-                % Normal equations (Eq 44)
-                Omega = H_l' * R_UWB_inv * H_l;
+                % 基础的高斯-牛顿海森矩阵 (J^T * W * J)
+                Omega_GN = H_l' * R_UWB_inv * H_l;
                 b = H_l' * R_UWB_inv * r_l;
                 
-                delta_p = (Omega + obj.beta_inv * eye(3 * obj.Vehicle_num)) \ b;
+                % ==== 优化求解分支 ====
+                if obj.is_GN
+                    % 1. 高斯牛顿法 (CGN) + LM阻尼
+                    delta_p = (Omega_GN + obj.beta_inv * eye(3 * obj.Vehicle_num)) \ b;
+                else
+                    % 2. 精确牛顿法 (CN)
+                    Omega_Exact = Omega_GN + H_second_order;
+                    Omega_Exact = (Omega_Exact + Omega_Exact') / 2; % 保证严格对称
+                    
+                    % 必须进行正定投影与特征值截断 (取代简单的LM阻尼加单位阵)
+                    [V_eig, D_eig] = eig(Omega_Exact);
+                    eig_vals = diag(D_eig);
+                    eig_vals(eig_vals < obj.beta_inv) = obj.beta_inv; % 负特征值截断 & 阻尼
+                    Omega_Exact_pd = V_eig * diag(eig_vals) * V_eig';
+                    
+                    delta_p = Omega_Exact_pd \ b;
+                end
 
-                % 增加防飞车步长限制（如果单次迭代移动超过 1 米，强制截断）
-                
+                % 增加防飞车步长限制（如果单次迭代移动超过 max_step，强制截断）
                 step_norm = norm(delta_p);
                 if step_norm > obj.max_step
                     delta_p = delta_p * (obj.max_step / step_norm);
                 end
                 
-                % 位置更新 (Eq 45)
+                % 位置更新
                 p_iter = p_iter + delta_p;
                 
                 % 收敛判定
@@ -228,26 +273,27 @@ classdef CMLKF < handle
                 end
             end
             
-            % ==== 2. 似然信息提取 (Eq 46, 47) ====
+            % ==== 2. 似然信息提取 ====
             mu = p_iter - p_prior;
+            
+            % 【核心警告】：无论上面是 GN 还是 N，这里提取似然 Fisher 信息
+            % 必须且只能用一阶雅可比 J^T * W * J，不能包含二阶导数项！
             Xi_inv = H_l' * R_UWB_inv * H_l;
             
-            % ==== 3. 先验与似然融合 (Eq 48, 49) ====
+            % ==== 3. 先验与似然融合 ====
             Lambda = obj.Pi_mat' * Xi_inv * obj.Pi_mat;
             lambda = obj.Pi_mat' * Xi_inv * mu;
             
-            % 计算后验协方差 (Eq 50 - Information Form)
-            % 为保证数值稳定，避免使用易发散的 Woodbury (Eq 51/52)，采用 PDF 推荐的信息形式 (Eq 50)
-            % MATLAB 中使用左除 "\" 代替直接求逆保证精度
+            % 计算后验协方差 (Information Form)
             I9 = eye(9 * obj.Vehicle_num);
-            Sigma_inv_prior = obj.Sigma \ I9;                     % 先验信息矩阵
-            Sigma_post = (Sigma_inv_prior + Lambda) \ I9;         % 后验协方差
-            Sigma_post = (Sigma_post + Sigma_post') / 2;          % 强制对称
+            Sigma_inv_prior = obj.Sigma \ I9;                     
+            Sigma_post = (Sigma_inv_prior + Lambda) \ I9;         
+            Sigma_post = (Sigma_post + Sigma_post') / 2;          
             
-            % 全局状态校正量向量 (Eq 53)
+            % 全局状态校正量向量
             Delta_theta = Sigma_post * lambda;
             
-            % ==== 4. 状态流形收回 (Retraction - Eq 54, 55, 56) ====
+            % ==== 4. 状态流形收回 (Retraction) ====
             for i = 1:obj.Vehicle_num
                 idx_p = 9*(i-1) + (1:3);
                 idx_v = 9*(i-1) + (4:6);
@@ -264,7 +310,7 @@ classdef CMLKF < handle
                 % 姿态在 SO(3) 上的流形指数补偿
                 R_new = obj.R(:, :, i) * obj.exp_SO3(dphi);
                 
-                % 数值稳定化：重正交化 (使用 SVD 保留最接近的合法 SO3)
+                % 数值稳定化：重正交化 (使用 SVD)
                 [U, ~, V] = svd(R_new);
                 obj.R(:, :, i) = U * V';
             end
@@ -273,7 +319,6 @@ classdef CMLKF < handle
             obj.Sigma = Sigma_post;
         end
     end
-    
     methods(Static)
         % =========================================================
         % 辅助函数：李代数和流形运算操作 (数值鲁棒版)
