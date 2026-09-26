@@ -56,7 +56,7 @@ classdef CMLKF < handle
                 if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
             end
             obj.epsilon = 1e-4;
-            obj.max_iter = 70;
+            obj.max_iter = 40;
             obj.max_step = Inf; 
             obj.beta_inv = 100;   
 

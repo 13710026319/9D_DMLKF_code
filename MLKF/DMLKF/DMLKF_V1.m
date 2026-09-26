@@ -53,7 +53,7 @@ classdef DMLKF_V1 < handle
                 if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
             end
             
-            obj.max_iter = 80;
+            obj.max_iter = 40;
             obj.epsilon  = 1e-4;
             obj.beta_inv = 100;  
             obj.max_step = Inf; 
@@ -194,16 +194,18 @@ classdef DMLKF_V1 < handle
                 dp_glob = H_reg \ g_glob;
                 
                 if any(isnan(dp_glob(:))) || any(isinf(dp_glob(:))), dp_glob = zeros(3*I_num, 1); end
-                for i = 1:I_num
-                    idx_i = 3*i-2 : 3*i;
-                    step_i = dp_glob(idx_i);
-                    if norm(step_i) > obj.max_step
-                        dp_glob(idx_i) = step_i * (obj.max_step / norm(step_i));
-                    end
+                step_norm = norm(dp_glob);
+                if step_norm > obj.max_step
+                    dp_glob = dp_glob * (obj.max_step / step_norm);
                 end
                 
+                % 状态更新
                 p_iter = p_iter - reshape(dp_glob, 3, I_num);
-                if max(abs(dp_glob)) < obj.epsilon, break; end
+                
+                % 将原来的 max(abs(dp_glob)) 改为 norm(dp_glob)
+                if norm(dp_glob) < obj.epsilon
+                    break; 
+                end
             end
             p_MLE_perfect = p_iter; 
             
