@@ -6,7 +6,7 @@ clc; clear; close all;
 %% 1. 实验参数与运行配置
 Vehicle_num = 8;            
 Anchor_num  = 4;             
-K_test_list = 7; % 邻居数
+K_test_list = 4; % 邻居数
 
 % 保留一定比例的零偏误差以破坏 IMU 先验，凸显测距优化优势 (1.0为完全补偿, 0.7为保留30%漂移)
 bias_comp_ratio = 1; 
@@ -17,8 +17,9 @@ data_ratio  = 1;
 % =========================================================================
 
 % 路径配置
-data_dir = 'E:\DMLKF_code\Data';
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D_1.mat', Vehicle_num, Anchor_num));
+% data_dir = 'E:\DMLKF_code\Data';
+data_dir = 'E:\DMLKF_code\TEST\GN_compare\Data';
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_pure.mat', Vehicle_num, Anchor_num));
 
 %% 2. 加载数据集与截断处理
 if ~exist(data_file, 'file')
@@ -68,6 +69,10 @@ fprintf('[Baseline] 正在运行 集中式 CMLKF (全基站 + 全连通车间)..
 fprintf('====================================================\n');
 
 kf_cmlkf = CMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
+
+% 降低阻尼，快速查到CMLKF在当前数据集下最优的结果
+kf_cmlkf.beta_inv = 0.01;
+kf_cmlkf.max_iter = 1;
 
 % 预分配估计容器，长度限制为 N_steps
 est_p_cmlkf = zeros(N_steps, 3, Vehicle_num);
@@ -130,7 +135,9 @@ for test_idx = 1:length(K_test_list)
     V2V_Mask = generate_v2v_mask(Vehicle_num, K);
     
     kf_dmlkf = DMLKF_V1(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
-    
+    kf_dmlkf.beta_inv = 0.01;
+    kf_dmlkf.max_iter = 30;
+
     % 预分配估计容器，长度限制为 N_steps
     est_p_dmlkf = zeros(N_steps, 3, Vehicle_num);
     est_v_dmlkf = zeros(N_steps, 3, Vehicle_num);

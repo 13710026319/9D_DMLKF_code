@@ -86,7 +86,7 @@ classdef DMLKF_C < handle
 
             obj.max_iter = max_iter;   
             obj.epsilon  = 1e-4; 
-            obj.beta_inv = 0.1;  
+            obj.beta_inv = 50;  
             obj.max_step = 1;  
 
             I_num = Vehicle_num;

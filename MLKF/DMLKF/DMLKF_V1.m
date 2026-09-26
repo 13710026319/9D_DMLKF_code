@@ -55,7 +55,7 @@ classdef DMLKF_V1 < handle
             
             obj.max_iter = 40;
             obj.epsilon  = 1e-4;
-            obj.beta_inv = 100;  
+            obj.beta_inv = 50;  
             obj.max_step = Inf; 
             
             % [修改点] 初始化：每个节点维护一个全网的 9I x 9I 协方差矩阵视图
