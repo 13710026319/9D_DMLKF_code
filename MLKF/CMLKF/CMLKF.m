@@ -58,7 +58,7 @@ classdef CMLKF < handle
             obj.epsilon = 1e-4;
             obj.max_iter = 40;
             obj.max_step = Inf; 
-            obj.beta_inv = 100;   
+            obj.beta_inv = 50;   
 
             % 2. 初始化状态
             % p0, v0 应为 3I x 1 列向量；R0 应为 3 x 3 x I 矩阵
