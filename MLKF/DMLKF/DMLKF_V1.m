@@ -1,13 +1,10 @@
 classdef DMLKF_V1 < handle
     % DMLKF_V1 - Change 1 理论验证版 (Oracle Bound) 与CMLKF对比
-    % 核心验证目标：隔离 D-GN 优化误差，专注于滤波框架中"协方差保守次优融合"的理论验证。
-    % 机制：
-    % 1. 优化步：使用上帝视角的集中式 GN 解出完美的全局 MLE 状态和联合海森矩阵。
+
+    % 1. 优化步：使用集中式 GN 解出完美的全局 MLE 状态和联合海森矩阵。
     % 2. 预测步：构建全局 A 和 Q，自然传递节点与邻居之间的交叉协方差。
     % 3. 更新步：彻底抛弃舒尔补边缘化！直接提取包含自身的邻居的局部协方差块，
-    %    执行 Change 1 证明的保守次优融合：Sigma = inv( inv(Sigma_prior) + Lambda )，
-    %    全连通拓扑下，该架构在数学上 100% 退化为集中式最优 Information Filter。
-    
+   
     properties
         Vehicle_num
         Anchor_num
