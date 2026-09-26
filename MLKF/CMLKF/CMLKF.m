@@ -26,10 +26,11 @@ classdef CMLKF < handle
         max_iter          % Gauss-Newton 最大迭代次数 (默认 10)
         Pi_mat            % 投影选择矩阵 \pi (3I x 9I)
         max_step 
+        beta_inv          % LM 阻尼系数 (默认 1e-2，与 DMLKF_V1 的 beta_inv 对齐)
     end
     
     methods
-        function obj = CMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0)
+        function obj = CMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, Noise)
             % 构造函数：初始化系统维度、参数与初始状态
             obj.Vehicle_num = Vehicle_num;
             obj.Anchor_num = Anchor_num;
@@ -38,13 +39,26 @@ classdef CMLKF < handle
             obj.g_vec = [0; 0; -9.81];
             
             % 1. 模拟不可信的先验，将IMU的参数置信度稍调大
-            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      % sigma_na = 0.07
-            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     % sigma_nw = 0.007
-            obj.UWB_sigma_anc = 0.18;                  % sigma_anc = 0.1
-            obj.UWB_sigma_rel = 0.18;                  % sigma_rel = 0.1
+            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      
+            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     
+            obj.UWB_sigma_anc = 0.18;                  
+            obj.UWB_sigma_rel = 0.18;                  
+
+            % ==== [可选] 外部噪声参数输入 ====
+            % 用法： N.IMU_Sigma_a = (0.05)^2*eye(3);  N.IMU_Sigma_w = (0.005)^2*eye(3);
+            %        N.UWB_sigma_anc = 0.18;  N.UWB_sigma_rel = 0.18;
+            %        kf = CMLKF(V, A, anchors, dt, p0, v0, R0, N);
+            % 只覆盖传入的字段；不传（或传空）时完全保持上面的默认值，行为与以前一致。
+            if nargin >= 8 && ~isempty(Noise) && isstruct(Noise)
+                if isfield(Noise, 'IMU_Sigma_a'),   obj.IMU_Sigma_a   = Noise.IMU_Sigma_a;   end
+                if isfield(Noise, 'IMU_Sigma_w'),   obj.IMU_Sigma_w   = Noise.IMU_Sigma_w;   end
+                if isfield(Noise, 'UWB_sigma_anc'), obj.UWB_sigma_anc = Noise.UWB_sigma_anc; end
+                if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
+            end
             obj.epsilon = 1e-4;
-            obj.max_iter = 30;
-            obj.max_step = 1; 
+            obj.max_iter = 40;
+            obj.max_step = Inf; 
+            obj.beta_inv = 100;   
 
             % 2. 初始化状态
             % p0, v0 应为 3I x 1 列向量；R0 应为 3 x 3 x I 矩阵
@@ -196,7 +210,7 @@ classdef CMLKF < handle
                 Omega = H_l' * R_UWB_inv * H_l;
                 b = H_l' * R_UWB_inv * r_l;
                 
-                delta_p = (Omega + 1e-2 * eye(3 * obj.Vehicle_num)) \ b;
+                delta_p = (Omega + obj.beta_inv * eye(3 * obj.Vehicle_num)) \ b;
 
                 % 增加防飞车步长限制（如果单次迭代移动超过 1 米，强制截断）
                 

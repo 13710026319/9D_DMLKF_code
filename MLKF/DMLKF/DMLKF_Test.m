@@ -1,11 +1,11 @@
 % DMLKF_Test.m 
-% DMLKF (9D 分布式最大似然卡尔曼滤波) - 测试与评价脚本
+% DMLKF_D (9D 分布式最大似然卡尔曼滤波) - 测试与评价脚本
 clc; clear; close all;
 
 %% 1. 测试参数与运行配置
-Vehicle_num = 15;            
-Anchor_num  = 3;     
-neighbor_k  = 7; % 邻居数
+Vehicle_num = 8;            
+Anchor_num  = 4;     
+neighbor_k  = 4; % 邻居数
 run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
 save_flag   = 0;
 
@@ -22,7 +22,7 @@ if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
 
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D_1.mat', Vehicle_num, Anchor_num));
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
 res_file  = fullfile(res_dir, sprintf('DMLKF_Veh%d_Anc%d_20.mat', Vehicle_num, Anchor_num));
 
 %% 2. 检查结果文件是否存在 (run_flag 机制)
@@ -99,7 +99,8 @@ for i = 1:Vehicle_num
     v0(3*i-2 : 3*i) = v_true_init(:);
     R0(:, :, i)     = trajectories.(v_name).R_true(:, :, 1); 
 end
-kf = DMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
+
+kf = DMLKF_D(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask);
 
 % 结果存储空间
 est_p = zeros(N_steps, 3, Vehicle_num);

@@ -1,4 +1,5 @@
 % 拓扑网络生成与掩码测试脚本 (Demo)
+% 总车辆数必须是偶数
 clc; clear;
 Vehicle_num = 10;
 Anchor_num = 4; % 假设有4个基站
@@ -27,29 +28,42 @@ for i = 1:Vehicle_num
     end
 end
 
-%% 2. 生成车间相对测距掩码 (V2V_Mask: I x I)
-% 采用静态拓扑，支持奇数或偶数个邻居 (奇数时前方多连一个，后方少连一个)
+%% 2. 生成车间相对测距掩码 (V2V_Mask: I x I) (修复非对称Bug版)
 K_degree = 5; % 测试奇数个邻居的情况
 V2V_Mask = zeros(Vehicle_num, Vehicle_num);
 
-K_fwd = ceil(K_degree / 2);  % 前面(序号变大方向)分大头
-K_bwd = floor(K_degree / 2); % 后面(序号变小方向)分小头
+% 提取对称部分
+K_half = floor(K_degree / 2); 
 
 for i = 1:Vehicle_num
-    % 往后(序号变大方向)连 K_fwd 个
-    for d = 1:K_fwd
+    % 1. 绝对对称地连接前后各 K_half 个节点
+    for d = 1:K_half
         idx_forward = mod(i + d - 1, Vehicle_num) + 1;
-        V2V_Mask(i, idx_forward) = 1;
-    end
-    % 往前(序号变小方向)连 K_bwd 个
-    for d = 1:K_bwd
         idx_backward = mod(i - d - 1, Vehicle_num) + 1;
+        V2V_Mask(i, idx_forward) = 1;
         V2V_Mask(i, idx_backward) = 1;
+    end
+    
+    % 2. 处理 K 为奇数的情况：连接圆环正对面的节点
+    if mod(K_degree, 2) ~= 0
+        if mod(Vehicle_num, 2) ~= 0
+            error('图论限制: 当每辆车的邻居数 K_degree 为奇数时，车辆总数 Vehicle_num 必须为偶数才能构成对称拓扑！');
+        end
+        % 找到对径节点 (Diametrically opposite node)
+        idx_opposite = mod(i + Vehicle_num/2 - 1, Vehicle_num) + 1;
+        V2V_Mask(i, idx_opposite) = 1;
     end
 end
 
 % 确保对角线自身到自身不通信 (为0)
 V2V_Mask(logical(eye(Vehicle_num))) = 0;
+
+% 安全校验：检查矩阵是否已经完全对称
+if ~isequal(V2V_Mask, V2V_Mask')
+    warning('V2V掩码矩阵非对称！请检查算法逻辑。');
+else
+    fprintf('检查通过：V2V掩码矩阵已完全对称。\n');
+end
 
 %% 3. 可视化打印拓扑结果
 fprintf('=== 基站连接掩码 (Anchor Mask) ===\n');
