@@ -15,7 +15,7 @@ data_ratio = 0.2;
 
 % 路径配置 (使用你指定的数据集)
 data_dir = 'E:\DMLKF_code\TEST\GN_compare\Data';
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_subpure_1.mat', Vehicle_num, Anchor_num));
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_subpure.mat', Vehicle_num, Anchor_num));
 % data_dir = 'E:\DMLKF_code\Data';
 % data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
 %% 2. 加载数据集
