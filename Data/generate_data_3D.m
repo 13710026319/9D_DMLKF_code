@@ -19,8 +19,8 @@
 	Anchor_num = 4;             
 	% ==================================================
 	% 保存路径
-	save_dir = 'E:\DMLKF_code\Data'; 
-	trajectories_mat_name = sprintf('Trj_Veh%d_Anc%d_3D_1.mat', Vehicle_num, Anchor_num);
+	save_dir = 'E:\DMLKF_code\TEST\C_compare\Data'; 
+	trajectories_mat_name = sprintf('Trj_Veh%d_Anc%d_pure.mat', Vehicle_num, Anchor_num);
 	% 噪声参数
 	IMU_noise_params.sigma_na = 0.05;      
 	IMU_noise_params.sigma_nw = 0.005;     
