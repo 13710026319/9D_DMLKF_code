@@ -41,7 +41,7 @@ fig = figure('Name', 'iter_compare', 'Color', 'w');
 hold on; grid on; box on;
 
 plot(it, rm, 'o-', 'LineWidth', 1.8, 'MarkerSize', 7, 'MarkerFaceColor', 'w', ...
-     'Color', [0.85 0.20 0.15], 'DisplayName', 'Distributed GN (DMLKF\_C)');
+     'Color', [0.85 0.20 0.15], 'DisplayName', 'Distributed Newton (DMLKF\_C)');
 
 if isfinite(v1_rmse)
     % 这里加入了 'Label' 属性及其对齐方式，用于在图表左侧显示 V1 的数值

@@ -70,10 +70,15 @@ function [rmse_p, mean_it, cap_frac, sec] = run_once(D, algo, max_iter, V2V_Mask
 switch algo
     case {'DMLKF', 'DMLKF_C'}
         kf = DMLKF_C(D.V, D.A, D.anchors, D.dt, D.p0, D.v0, D.R0, V2V_Mask, max_iter);
-        kf.print_flag = 0;                       % 不在子进程里刷未收敛警告
-        kf.beta_inv = 0.1;
-        kf.max_step = Inf; 
-
+    %     kf.print_flag = 0;                       % 不在子进程里刷未收敛警告
+    %     kf.beta_inv = 0.2;
+    %     kf.max_step = Inf;
+    %     kf.is_GN = 0;           % 使用分布式牛顿，下面是其最适合的参数设置
+    %     kf.ALPHA_SAFETY = 1;
+    %     kf.alpha_const  = min(1.0, max(0.01, ...
+    % kf.ALPHA_SAFETY * (1 - kf.lambda_2) / (1 + sqrt(kf.lambda_2))));
+        
+        cfg = struct('ALPHA_SAFETY',1, 'print_flag',0, 'beta_inv', 0.2, 'max_step', Inf, 'is_GN', 0);
     case 'V1'
         kf = DMLKF_V1(D.V, D.A, D.anchors, D.dt, D.p0, D.v0, D.R0);
         kf.beta_inv = 0.01;

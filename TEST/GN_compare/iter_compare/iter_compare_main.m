@@ -37,9 +37,9 @@ function T = iter_compare_main(K, iter_list, data_ratio, dataset_name, save_png,
 % 打印、绘图与保存的数值统一保留小数点后 4 位。
 
 if nargin < 1 || isempty(K),            K = 7; end % 邻居数
-if nargin < 2 || isempty(iter_list),    iter_list = [10 20 30 40 50 80 100 150]; end
+if nargin < 2 || isempty(iter_list),    iter_list = [1 2 3 5 7 10 15 20 25 30 35 50]; end
 if nargin < 3 || isempty(data_ratio),   data_ratio = 0.2; end   % 任务约定：只用数据集的 20%
-if nargin < 4 || isempty(dataset_name), dataset_name = 'Trj_Veh8_Anc4_pure.mat'; end
+if nargin < 4 || isempty(dataset_name), dataset_name = 'Trj_Veh8_Anc4_pure_1.mat'; end
 if nargin < 5 || isempty(save_png),     save_png = true; end
 if nargin < 6,                          cfg = struct(); end
 

@@ -1,5 +1,5 @@
 classdef DMLKF_DN < handle
-    % DMLKF - 9D Distributed Maximum Likelihood Kalman Filter (Distributed Newton Version)
+    % DMLKF - 由DMLKF_D该来的DN框架，使用论文内的自适应步长
     % 优化框架：已将原来的 Gauss-Newton (J^T*J) 近似修改为使用精确二阶导数的 Distributed Newton (DN) 框架
     
     properties
