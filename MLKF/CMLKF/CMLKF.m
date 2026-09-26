@@ -39,10 +39,10 @@ classdef CMLKF < handle
             obj.g_vec = [0; 0; -9.81];
             
             % 1. 模拟不可信的先验，将IMU的参数置信度稍调大
-            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      % sigma_na = 0.07
-            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     % sigma_nw = 0.007
-            obj.UWB_sigma_anc = 0.18;                  % sigma_anc = 0.1
-            obj.UWB_sigma_rel = 0.18;                  % sigma_rel = 0.1
+            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      
+            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     
+            obj.UWB_sigma_anc = 0.18;                  
+            obj.UWB_sigma_rel = 0.18;                  
 
             % ==== [可选] 外部噪声参数输入 ====
             % 用法： N.IMU_Sigma_a = (0.05)^2*eye(3);  N.IMU_Sigma_w = (0.005)^2*eye(3);
@@ -56,9 +56,9 @@ classdef CMLKF < handle
                 if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
             end
             obj.epsilon = 1e-4;
-            obj.max_iter = 30;
-            obj.max_step = 1; 
-            obj.beta_inv = 1e-2;   % LM 阻尼：原来以 1e-2 硬编码在 update() 里，现提取为可调参数
+            obj.max_iter = 70;
+            obj.max_step = Inf; 
+            obj.beta_inv = 100;   
 
             % 2. 初始化状态
             % p0, v0 应为 3I x 1 列向量；R0 应为 3 x 3 x I 矩阵

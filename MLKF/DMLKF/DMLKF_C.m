@@ -67,10 +67,10 @@ classdef DMLKF_C < handle
             obj.g_vec = [0; 0; -9.81];
             
             % 以下为VS V1或者集中式GN时的参数
-            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      % sigma_na = 0.07
-            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     % sigma_nw = 0.007
-            obj.UWB_sigma_anc = 0.18;                  % sigma_anc = 0.1
-            obj.UWB_sigma_rel = 0.18;                  % sigma_rel = 0.1
+            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      
+            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     
+            obj.UWB_sigma_anc = 0.18;                  
+            obj.UWB_sigma_rel = 0.18;   
 
             % ==== [可选] 外部噪声参数输入 ====
             % 用法： N.IMU_Sigma_a = (0.05)^2*eye(3);  N.IMU_Sigma_w = (0.005)^2*eye(3);

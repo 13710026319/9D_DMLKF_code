@@ -1,5 +1,5 @@
 classdef DMLKF_V1 < handle
-    % DMLKF_V1 - Change 1 理论验证版 (Oracle Bound)
+    % DMLKF_V1 - Change 1 理论验证版 (Oracle Bound) 与CMLKF对比
     % 核心验证目标：隔离 D-GN 优化误差，专注于滤波框架中"协方差保守次优融合"的理论验证。
     % 机制：
     % 1. 优化步：使用上帝视角的集中式 GN 解出完美的全局 MLE 状态和联合海森矩阵。
@@ -36,10 +36,10 @@ classdef DMLKF_V1 < handle
             obj.dt_imu = dt_imu;
             obj.g_vec = [0; 0; -9.81];
             
-            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      % sigma_na = 0.07
-            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     % sigma_nw = 0.007
-            obj.UWB_sigma_anc = 0.18;                  % sigma_anc = 0.1
-            obj.UWB_sigma_rel = 0.18;                  % sigma_rel = 0.1
+            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      
+            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     
+            obj.UWB_sigma_anc = 0.18;                  
+            obj.UWB_sigma_rel = 0.18;   
 
             % ==== [可选] 外部噪声参数输入 ====
             % 用法： N.IMU_Sigma_a = (0.05)^2*eye(3);  N.IMU_Sigma_w = (0.005)^2*eye(3);
@@ -53,10 +53,10 @@ classdef DMLKF_V1 < handle
                 if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
             end
             
-            obj.max_iter = 30;
+            obj.max_iter = 80;
             obj.epsilon  = 1e-4;
-            obj.beta_inv = 0.01;  
-            obj.max_step = 1; 
+            obj.beta_inv = 100;  
+            obj.max_step = Inf; 
             
             % [修改点] 初始化：每个节点维护一个全网的 9I x 9I 协方差矩阵视图
             Sigma_0_blk = blkdiag((0.1^2)*eye(3), (0.1^2)*eye(3), ((pi/180)^2)*eye(3));
