@@ -1,5 +1,6 @@
 % DGN_DN_Test.m 
-% 对比 DGN (高斯-牛顿) 与 DN (精确牛顿) 在位置估计上的差异
+% 测试分布式高斯牛顿 (D-GN) 与 分布式精确牛顿 (D-N) 
+% 使用 DMLKF_C 对比，目的是在iter_compare_main上让分布式的趋于集中式
 clc; clear; close all;
 
 %% 1. 测试参数与运行配置
@@ -11,18 +12,18 @@ neighbor_k  = 4; % 邻居数
 bias_comp_ratio = 1; 
 
 % 控制截取数据集的比例
-data_ratio  = 0.1;
+data_ratio  = 0.2;
 
 % 路径配置
-data_dir = 'E:\DMLKF_code\Data';
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
+data_dir = 'E:\DMLKF_code\TEST\GN_compare\Data';
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_pure.mat', Vehicle_num, Anchor_num));
 
 %% 2. 加载数据集
 if ~exist(data_file, 'file')
     error('未找到数据集文件: %s\n请先运行生成脚本生成该数据！', data_file);
 end
 load(data_file, 'trajectories', 'anchors', 'IMU_noise_params', 'UWB_noise_params');
-fprintf('数据集加载成功，开始对比 DGN 与 DN 算法...\n');
+fprintf('数据集加载成功，开始对比 D-GN 与 D-N 算法...\n');
 
 N_steps_total = length(trajectories.V1.Time_true);
 N_steps = max(2, round(N_steps_total * data_ratio)); 
@@ -30,23 +31,11 @@ fprintf('>> 实验设定的数据截取比例: %.1f%%\n', data_ratio * 100);
 fprintf('>> 实际运行步数 / 总步数: %d / %d\n', N_steps, N_steps_total);
 dt_imu = trajectories.V1.Time_true(2) - trajectories.V1.Time_true(1);
 
-%% 3. 生成静态拓扑掩码 (三档基站 + K-Regular 车间)
-% A. 基站掩码 (30% 全基站, 50% 半基站, 20% 无基站)
-N_tier1 = round(0.3 * Vehicle_num);
-N_tier2 = round(0.5 * Vehicle_num);
+%% 3. 生成静态拓扑掩码
+% A. 基站掩码 (修改：取消分级制度，所有车辆均可观测所有基站)
 Anchor_Mask = ones(Vehicle_num, Anchor_num);
-for i = 1:Vehicle_num
-    if i <= N_tier1
-    elseif i <= N_tier1 + N_tier2
-        for anc_idx = 1:Anchor_num
-            if mod(anc_idx, 2) ~= 0, Anchor_Mask(i, anc_idx) = 0; end
-        end
-    else
-        Anchor_Mask(i, :) = 0;
-    end
-end
 
-% B. 车间掩码
+% B. 车间掩码 (静态环形拓扑)
 K_degree = min(neighbor_k, Vehicle_num - 1); 
 V2V_Mask = zeros(Vehicle_num, Vehicle_num);
 K_fwd = ceil(K_degree / 2); 
@@ -63,7 +52,7 @@ for i = 1:Vehicle_num
 end
 V2V_Mask(logical(eye(Vehicle_num))) = 0;
 
-%% 4. 初始化 DGN 和 DN 滤波器
+%% 4. 初始化滤波器 (使用 DMLKF_C)
 p0 = zeros(3 * Vehicle_num, 1);
 v0 = zeros(3 * Vehicle_num, 1);
 R0 = zeros(3, 3, Vehicle_num);
@@ -74,20 +63,23 @@ for i = 1:Vehicle_num
     R0(:, :, i)     = trajectories.(v_name).R_true(:, :, 1); 
 end
 
-% 分别实例化两个类
-kf_DGN = DMLKF_D(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask);
-kf_DN  = DMLKF_DN(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask);
+max_iter = 50; % 分布式最大迭代次数
 
-% 测试修改参数 DN需要更大的beta_inv 且在UWB参数符合实际时优于DGN
-kf_DN.UWB_sigma_anc = 0.1;
-kf_DN.UWB_sigma_rel = 0.1;
-kf_DN.max_step = 0.06;
-kf_DN.beta_inv = 100;
+% 分别实例化两个类 (使用同一套代码，仅改变 is_GN 标志)
+kf_DGN = DMLKF_C(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, max_iter);
+kf_DN  = DMLKF_C(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, max_iter);
 
-kf_DGN.UWB_sigma_anc = 0.1;
-kf_DGN.UWB_sigma_rel = 0.1;
-kf_DGN.max_step = 0.06;
+% [核心设置] 控制优化方法
+kf_DGN.is_GN = 1; % 使用分布式高斯-牛顿
+kf_DN.is_GN  = 0; % 使用分布式精确牛顿 (含二阶残差项)
 
+% 测试修改参数 (DN需要更大的beta_inv 且在UWB参数符合实际时优于DGN)
+
+kf_DN.max_step = Inf;
+kf_DN.beta_inv = 10;
+
+kf_DGN.beta_inv = 0.1;
+kf_DGN.max_step = Inf; 
 
 
 % 仅存储位置结果用于对比
@@ -179,5 +171,4 @@ function print_comparison(Vehicle_num, rmse_DGN, rmse_DN, m_DGN, m_DN)
     diff_m = m_DGN - m_DN;
     fprintf('  Avg   |      %6.4f       |      %6.4f      |    %6.4f\n', m_DGN, m_DN, diff_m);
     fprintf('====================================================================\n');
-
 end

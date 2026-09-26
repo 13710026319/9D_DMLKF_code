@@ -46,12 +46,15 @@ classdef DMLKF_C < handle
         W_c         % 逐变量 Metropolis-Hastings 权重矩阵
         W_global    % 全局拓扑权重矩阵（构造时用于计算代数连通度 lambda_2）
         lambda_2    % 全局通信图的代数连通度（第二大特征值）
+
+        is_GN       % 1为使用高斯牛顿，0为牛顿法
     end
     
     methods
         function obj = DMLKF_C(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, max_iter, Noise)
             % [文档修改] 新增 V2V_Mask 输入：固定的车间通信邻接矩阵（对称，1=连通）
             % 因为 Ui 全程不变，拓扑只需要在这里解析一次
+            obj.is_GN = 1;
 
             if nargin < 9 || isempty(max_iter)
                 max_iter = 200;
@@ -241,13 +244,14 @@ classdef DMLKF_C < handle
             p_prior = zeros(3, I_num);
             for i = 1:I_num, p_prior(:, i) = obj.Nodes{i}.p; end
             
-            % --- D-GN 初始化 ---
+            % --- D-GN / D-N 初始化 ---
             S = zeros(3, I_num, I_num);
             G = zeros(3, I_num, I_num);
             H_mat = zeros(3, 3, I_num, I_num, I_num); 
             
             for i = 1:I_num
                 if isempty(U_list{i}), continue; end
+                % eval_local_cost 内部会根据 obj.is_GN 决定是否计算精确二阶海森矩阵
                 [g_init, h_init] = obj.eval_local_cost(i, zeros(3*length(U_list{i}),1), U_list{i}, p_prior, uwb_anc, uwb_rel);
                 for c_idx = 1:length(U_list{i})
                     c = U_list{i}(c_idx);
@@ -259,11 +263,11 @@ classdef DMLKF_C < handle
                 end
             end
 
-            % --- 固定分布式步长：构造时按拓扑算好，全程恒定 ---
+            % --- 固定分布式步长 ---
             alpha_c = obj.alpha_const;
 
-            % --- D-GN 迭代 (Section IV，未改动，与文档一致) ---
-            n_clip = 0;   % [新增-调参用] 统计 max_step 截断次数
+            % --- 分布式迭代寻优 ---
+            n_clip = 0;   
             for iter = 1:obj.max_iter
                 S_next = S; G_next = zeros(size(G)); H_next = zeros(size(H_mat));
                             
@@ -282,6 +286,8 @@ classdef DMLKF_C < handle
                         end
                     end
                     
+                    % 无论 D-GN 还是 D-N，这里强制正定投影，确保更新方向的安全性
+                    % (尤其是 D-N 的精确海森在非凸区可能出现负特征值)
                     H_blk = (H_blk + H_blk') / 2;
                     [V, D] = eig(H_blk);
                     eig_vals = diag(D);
@@ -384,7 +390,7 @@ classdef DMLKF_C < handle
                 if err < obj.epsilon, break; end
             end
 
-            % [新增-调参] 记录本次 update 的 D-GN 收敛情况
+            % [调参记录]
             if obj.diag_flag
                 obj.last_iter = iter;
                 obj.last_err  = err;
@@ -398,13 +404,8 @@ classdef DMLKF_C < handle
             end
             
             % ========================================================
-            % --- 5. Posterior Fusion [文档修改 Eq46-54] ---
-            % 不再做 Schur 补边缘化，改为对联合精度矩阵直接求逆，
-            % 保留完整的跨节点互相关信息，供下一步 predict() 使用
+            % --- 5. Posterior Fusion ---
             % ========================================================
-            
-            % [时序冻结] 缓存本次 update 开始前每个节点各自的联合先验 SigmaJ
-            % 防止同一轮循环内 i 较大的节点用到 c<i 已经被更新过的"后验"
             Sigma_prior_cache = cell(I_num, 1);
             for c = 1:I_num
                 Sigma_prior_cache{c} = obj.Nodes{c}.SigmaJ;
@@ -414,7 +415,7 @@ classdef DMLKF_C < handle
                 Ui_len = length(U_list{i});
                 if Ui_len == 0, continue; end
                 
-                % --- Λ (似然Fisher信息) 重构，Eq 39-41，未改动 ---
+                % --- Λ (似然信息提取) ---
                 Lambda_3D = zeros(3*Ui_len, 3*Ui_len);
                 s_dn_vec = zeros(3*Ui_len, 1);
                 for c_idx = 1:Ui_len
@@ -425,33 +426,33 @@ classdef DMLKF_C < handle
                         d = U_list{i}(d_idx);
                         Ud_nodes = find(U_set(:, d));
                         Ucd_size = length(intersect(Uc_nodes, Ud_nodes));
+                        % 提取收敛后的共识海森矩阵
                         Lambda_3D(3*c_idx-2:3*c_idx, 3*d_idx-2:3*d_idx) = Ucd_size * H_mat(:, :, c, d, i);
                     end
                 end
                 Lambda_3D = (Lambda_3D + Lambda_3D') / 2; 
                 
+                % 关键保护：若启用精确牛顿(D-N)，其收敛后的海森矩阵可能包含非正定的二阶期望噪声。
+                % 在统计学上，用截断负特征值后的海森矩阵作为观测信息矩阵 (Observed Info Matrix)
                 [V_lam, D_lam] = eig(Lambda_3D);
                 eig_lam = diag(D_lam);
-                eig_lam(eig_lam < 0) = 0;   
+                eig_lam(eig_lam < 0) = 0;   % 截断非物理的负特征值
                 Lambda_3D = V_lam * diag(eig_lam) * V_lam';
                 
                 Pi_mat = kron(eye(Ui_len), [eye(3), zeros(3,3), zeros(3,3)]);
                 Lambda_9D = Pi_mat' * Lambda_3D * Pi_mat;
                 lambda_9D = Pi_mat' * (Lambda_3D * s_dn_vec);
                 
-                % --- [文档修改 Eq46] 联合先验精度矩阵 = 整块联合协方差直接求逆 ---
-                % 不再是"逐个节点9x9分别求逆再block-diag拼接"（旧版本丢弃互相关的根源）
+                % --- 精度矩阵求逆与后验重构 ---
                 dim_i = 9 * Ui_len;
                 Sigma_prior_joint = Sigma_prior_cache{i};
                 Sigma_prior_joint = (Sigma_prior_joint + Sigma_prior_joint') / 2 + 1e-12 * eye(dim_i);
                 Gamma_prior = eye(dim_i) / Sigma_prior_joint;
                 
-                % --- Eq 47-48：信息可加融合 ---
                 Gamma_post = Gamma_prior + Lambda_9D;
                 gamma_post = lambda_9D; 
-                Gamma_post = (Gamma_post + Gamma_post') / 2 + 1e-10 * eye(dim_i); % 数值兜底
+                Gamma_post = (Gamma_post + Gamma_post') / 2 + 1e-10 * eye(dim_i); 
                 
-                % --- [文档修改 Eq49-50] 直接对整块联合精度矩阵求逆，不做 Schur 补 ---
                 SigmaJ_post = eye(dim_i) / Gamma_post;
                 SigmaJ_post = (SigmaJ_post + SigmaJ_post') / 2;
                 theta_joint = Gamma_post \ gamma_post;
@@ -461,7 +462,6 @@ classdef DMLKF_C < handle
                     SigmaJ_post = Sigma_prior_cache{i};
                 end
                 
-                % --- [文档修改 Eq51] 从联合误差向量中取出 ego 子向量（ego 恒为第1位）---
                 theta_ego = theta_joint(1:9);
                 
                 dp   = theta_ego(1:3);
@@ -474,13 +474,15 @@ classdef DMLKF_C < handle
                 [U, ~, V] = svd(R_new);
                 obj.Nodes{i}.R = U * V';
                 
-                % [文档修改] 存储完整联合后验协方差（含互相关块），供下一步 predict() 使用
                 obj.Nodes{i}.SigmaJ = SigmaJ_post;
             end
         end
         
         function [g_list, h_list] = eval_local_cost(obj, i, s_vec, Ui_nodes, p_prior_all, uwb_anc, uwb_rel)
-            % 未改动
+            % ==============================================================
+            % 计算局部的代价函数梯度与海森矩阵块
+            % 会根据 obj.is_GN 标志自动切换高斯-牛顿(GN)或精确牛顿(N)的构造
+            % ==============================================================
             num_vars = length(Ui_nodes);
             g_list = cell(num_vars, 1);
             h_list = cell(num_vars, num_vars);
@@ -490,6 +492,7 @@ classdef DMLKF_C < handle
             idx_ego = find(Ui_nodes == i);
             p_i = p_prior_all(:, i) + s_vec(3*idx_ego-2 : 3*idx_ego);
             
+            % 1. 基站绝对测距
             for k = 1:obj.Anchor_num
                 z = uwb_anc(i, k);
                 if ~isnan(z)
@@ -499,12 +502,20 @@ classdef DMLKF_C < handle
                     u_vec = delta / d; 
                     sig2 = obj.UWB_sigma_anc^2;
                     grad = (1/sig2) * (1 - z/d) * delta; 
-                    hess = (1/sig2) * (u_vec * u_vec'); 
+                    
+                    % [切换逻辑]
+                    if obj.is_GN
+                        hess = (1/sig2) * (u_vec * u_vec'); 
+                    else
+                        hess = (1/sig2) * (u_vec * u_vec' + (1 - z/d) * (eye(3) - u_vec * u_vec')); 
+                    end
+                    
                     g_list{idx_ego} = g_list{idx_ego} + grad;
                     h_list{idx_ego, idx_ego} = h_list{idx_ego, idx_ego} + hess;
                 end
             end
             
+            % 2. 相对节点测距
             for j = 1:obj.Vehicle_num
                 z = uwb_rel(i, j);
                 if ~isnan(z) && j ~= i
@@ -517,7 +528,14 @@ classdef DMLKF_C < handle
                     sig2 = obj.UWB_sigma_rel^2;
                     g_i =  (1/sig2) * (1 - z/d) * delta;
                     g_j = -(1/sig2) * (1 - z/d) * delta;
-                    h_ii = (1/sig2) * (u_vec * u_vec'); 
+                    
+                    % [切换逻辑]
+                    if obj.is_GN
+                        h_ii = (1/sig2) * (u_vec * u_vec'); 
+                    else
+                        h_ii = (1/sig2) * (u_vec * u_vec' + (1 - z/d) * (eye(3) - u_vec * u_vec')); 
+                    end
+                    
                     g_list{idx_ego} = g_list{idx_ego} + g_i;
                     g_list{idx_nbr} = g_list{idx_nbr} + g_j;
                     h_list{idx_ego, idx_ego} = h_list{idx_ego, idx_ego} + h_ii;
