@@ -24,7 +24,7 @@ classdef DMLKF_C < handle
         %   lambda_2 为全局拓扑权重矩阵 W_global 的代数连通度（构造时算一次），
         %   邻居数 K 的影响已经包含在 lambda_2 里，因此不需要按 K 另外调参。
         %   自适应步长（Eq 34，按曲率 s_i 动态变化的那一支）只保留在 DMLKF_D 中。
-        ALPHA_SAFETY = 0.3  % 固定步长的缩放系数，0.3通常最优，也可根据实际调整
+        ALPHA_SAFETY = 1  % 固定步长的缩放系数，可根据实际调整
         alpha_const         % 依据拓扑结构计算出的固定步长
 
         % [新增-调参用] D-GN 收敛诊断（只记录，不影响计算）
