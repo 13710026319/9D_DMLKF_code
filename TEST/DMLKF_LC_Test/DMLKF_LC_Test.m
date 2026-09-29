@@ -13,7 +13,7 @@ save_flag = 1;   % 0: 不保存结果; 1: 保存 csv, mat 和 fig
 
 Vehicle_num = 8;            
 Anchor_num  = 4;             
-K_degree    = 2; % 暂定1-hop物理邻居数为3
+K_degree    = 4; % 暂定1-hop物理邻居数为3
 
 % 保留一定比例的零偏误差以破坏 IMU 先验，凸显测距优化优势
 bias_comp_ratio = 1; 
@@ -289,8 +289,9 @@ legend({'DMLKF\_LC', 'CMLKF (Lower Bound)'}, 'FontSize', 12, 'Location', 'northe
 set(gca, 'FontSize', 11, 'GridAlpha', 0.3);
 
 if save_flag
-    fig_file = fullfile(res_dir, sprintf('RMSE_vs_L_Veh%d_K%d.png', Vehicle_num, K_degree));
-    saveas(gcf, fig_file);
+    fig_file = fullfile(res_dir, sprintf('LC_Veh%d_K%d.png', Vehicle_num, K_degree));
+    % 使用 exportgraphics 替代 saveas，并设置 300 分辨率
+    exportgraphics(gcf, fig_file, 'Resolution', 300);
     fprintf('>> 图表已保存至: %s\n', fig_file);
 end
 
