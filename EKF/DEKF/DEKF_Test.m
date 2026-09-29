@@ -5,7 +5,7 @@ clc; clear; close all;
 %% 1. 测试参数与运行配置
 Vehicle_num = 8;            
 Anchor_num  = 4;     
-neighbor_k  = 2 ; % [修改] 邻居数 (避免与下方主循环的 k 变量发生冲突)
+neighbor_k  = 7 ; % [修改] 邻居数 (避免与下方主循环的 k 变量发生冲突)
 run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
 save_flag   = 0;
 

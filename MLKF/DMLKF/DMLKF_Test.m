@@ -5,7 +5,7 @@ clc; clear; close all;
 %% 1. 测试参数与运行配置
 Vehicle_num = 8;            
 Anchor_num  = 4;     
-neighbor_k  = 6; % 邻居数
+neighbor_k  = 7; % 邻居数
 run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
 save_flag   = 0;
 
@@ -135,6 +135,12 @@ for i = 1:Vehicle_num
 end
 
 kf = DMLKF_D(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask);
+
+if mod(neighbor_k, 2) == 0
+    kf.beta_inv = 10;   
+else
+    kf.beta_inv = 1;
+end
 
 % 结果存储空间
 est_p = zeros(N_steps, 3, Vehicle_num);
