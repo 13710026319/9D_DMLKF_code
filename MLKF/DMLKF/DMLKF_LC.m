@@ -1,7 +1,6 @@
 classdef DMLKF_LC < handle
     % DMLKF_LC - L-hop Distributed Maximum Likelihood Kalman Filter
     % 基于固定通信拓扑的 L 级通信扩展版分布式高斯-牛顿卡尔曼滤波算法
-    % 集中式版，无自适应步长，用于与集中式GN (CMLKF,DMLKF_V1,DMLKF_C) 比较
     
     properties
         Vehicle_num
@@ -20,8 +19,9 @@ classdef DMLKF_LC < handle
         beta_inv 
         max_step 
         
-        ALPHA_SAFETY = 1   % 固定步长的缩放系数，可根据实际调整
-        alpha_const         % 依据拓扑结构计算出的固定步长
+        is_auto_step  % 1: 启用理论最优自适应步长, 0: 使用固定步长 alpha_const
+        ALPHA_SAFETY = 1  % 步长调节参数
+        alpha_const         
 
         diag_flag = 1       
         last_iter = 0
@@ -31,7 +31,7 @@ classdef DMLKF_LC < handle
         last_clip = 0       
         clip_hist = []      
         
-        print_flag = 1; 
+        print_flag = 0; % 打印残差收敛
         Nodes 
         
         % --- L-hop 固定拓扑相关量 ---
@@ -52,6 +52,8 @@ classdef DMLKF_LC < handle
     methods
         function obj = DMLKF_LC(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, max_iter, L_hop, Noise)
             obj.is_GN = 1;
+
+            obj.is_auto_step = 1;
 
             if nargin < 9 || isempty(max_iter)
                 max_iter = 200;
@@ -85,7 +87,7 @@ classdef DMLKF_LC < handle
             obj.max_iter = max_iter;   
             obj.epsilon  = 1e-4; 
             obj.beta_inv = 50;  
-            obj.max_step = 1;  
+            obj.max_step = inf;  
 
             I_num = Vehicle_num;
             
@@ -312,8 +314,21 @@ classdef DMLKF_LC < handle
                 end
             end
 
-            alpha_c = obj.alpha_const;
             n_clip = 0;   
+            
+            % --- 分布式步长估计初始化 ---
+            if obj.is_auto_step
+                R_est = zeros(3, 3, I_num);
+                r_prev = zeros(3, 3, I_num);
+                alpha_nodes = zeros(I_num, 1);
+                for i = 1:I_num
+                    R_est(:,:,i) = eye(3); 
+                    alpha_nodes(i) = (1 - obj.lambda_2) / (1 + sqrt(obj.lambda_2)); 
+                end
+            else
+                % 如果关闭自适应，则所有节点使用固定步长
+                alpha_nodes = repmat(obj.alpha_const, I_num, 1);
+            end
             
             % ========================================================
             % --- 分布式高斯-牛顿迭代 (Two-Phase Communication) ---
@@ -362,10 +377,13 @@ classdef DMLKF_LC < handle
                         sum_s = zeros(3,1);
                         Uc_nodes = find(U_set(:, c));
                         comm_nodes = intersect(Uc_nodes, [i, N_list{i}]); 
-                        for j = comm_nodes'
+                        % 安全遍历，免疫矩阵形状陷阱
+                        for j_idx = 1:length(comm_nodes)
+                            j = comm_nodes(j_idx);
                             sum_s = sum_s + obj.W_c(i, j, c) * S(:, c, j);
                         end
-                        S_next(:, c, i) = sum_s - alpha_c * ds(3*c_idx-2 : 3*c_idx);
+                        % 使用独立节点的动态步长 alpha_nodes(i)
+                        S_next(:, c, i) = sum_s - alpha_nodes(i) * ds(3*c_idx-2 : 3*c_idx);
                     end
                 end
                 
@@ -399,7 +417,8 @@ classdef DMLKF_LC < handle
                         
                         % 梯度追踪更新
                         sum_g = zeros(3,1);
-                        for j = comm_nodes_c'
+                        for j_idx = 1:length(comm_nodes_c)
+                            j = comm_nodes_c(j_idx);
                             idx_c_in_j = find(U_list{j} == c);
                             term_g = G(:, c, j) + g_new_all{j}{idx_c_in_j} - g_old_all{j}{idx_c_in_j};
                             sum_g = sum_g + obj.W_c(i, j, c) * term_g;
@@ -418,7 +437,8 @@ classdef DMLKF_LC < handle
                             comm_nodes_cd = intersect(Ucd_nodes, [i, N_list{i}]);
                             
                             sum_h = zeros(3,3);
-                            for j = comm_nodes_cd'
+                            for j_idx = 1:length(comm_nodes_cd)
+                                j = comm_nodes_cd(j_idx);
                                 idx_c_j = find(U_list{j} == c);
                                 idx_d_j = find(U_list{j} == d);
                                 term_h = H_mat(:, :, c, d, j) + h_new_all{j}{idx_c_j, idx_d_j} - h_old_all{j}{idx_c_j, idx_d_j};
@@ -429,6 +449,51 @@ classdef DMLKF_LC < handle
                             H_next(:, :, c, d, i) = sum_h;
                         end
                     end
+                end
+                
+                % --- 分布式理论最优步长动态更新 (仅 is_auto_step = 1 时执行) ---
+                if obj.is_auto_step
+                    R_est_next = zeros(3, 3, I_num);
+                    for i = 1:I_num
+                        if isempty(U_list{i}), continue; end
+                        idx_ego = find(U_list{i} == i);
+                        if isempty(idx_ego), continue; end
+                        
+                        % 提取本车的局部海森和一致性海森
+                        h_local_ego = h_new_all{i}{idx_ego, idx_ego}; 
+                        H_cons_ego = H_next(:, :, idx_ego, idx_ego, i); 
+                        H_cons_reg = H_cons_ego + obj.beta_inv * eye(3);
+                        r_curr = h_local_ego / H_cons_reg; 
+                        
+                        if iter == 1
+                            r_prev(:,:,i) = r_curr; 
+                        end
+                        
+                        % 追踪器依赖 1-hop 物理全局拓扑 W_global (安全遍历)
+                        sum_R = zeros(3,3);
+                        comm_nodes_global = [i, obj.N_list{i}]; 
+                        for j_idx = 1:length(comm_nodes_global)
+                            j = comm_nodes_global(j_idx);
+                            sum_R = sum_R + obj.W_global(i, j) * R_est(:,:,j);
+                        end
+                        
+                        R_est_next(:,:,i) = sum_R + r_curr - r_prev(:,:,i);
+                        r_prev(:,:,i) = r_curr; 
+                        
+                        R_i = R_est_next(:,:,i);
+                        try
+                            norm_R = norm(R_i, 2);
+                            norm_invR = norm(inv(R_i + 1e-8*eye(3)), 2);
+                            s_i = 0.5 * (norm_R + 1 / norm_invR);
+                        catch
+                            s_i = 1.0;
+                        end
+                        s_i = max(0.1, min(10, s_i)); 
+                        
+                        alpha_opt = (1 - obj.lambda_2) / (1 + sqrt(s_i * obj.lambda_2));
+                        alpha_nodes(i) = max(0.05, min(1.0, alpha_opt)); 
+                    end
+                    R_est = R_est_next;
                 end
                 
                 err = max(abs(S_next(:) - S(:)));
@@ -564,8 +629,9 @@ classdef DMLKF_LC < handle
                 end
             end
             
-            % 2. 相对节点测距 (严格限制在 1-hop 物理邻居内评估)
-            for j = obj.N_list{i}'
+            % 2. 相对节点测距 (完全免疫向量行列形状陷阱的安全遍历法)
+            for j_idx = 1:length(obj.N_list{i})
+                j = obj.N_list{i}(j_idx);
                 z = uwb_rel(i, j);
                 if ~isnan(z)
                     idx_nbr = find(Ui_nodes == j);

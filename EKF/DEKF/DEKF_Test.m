@@ -17,7 +17,7 @@ data_ratio  = 0.2;
 
 % 路径配置 (修改为 DEKF 的保存路径)
 data_dir = 'E:\DMLKF_code\Data';
-res_dir  = 'E:\DMLKF_code\EKF\DEKF\RESULT';
+
 if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
