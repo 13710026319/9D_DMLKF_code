@@ -244,17 +244,19 @@ classdef CMLKF < handle
                     delta_p = delta_p * (obj.max_step / step_norm);
                 end
                 
-                % 位置更新
-                p_iter = p_iter + delta_p;
-                
-                % 收敛判定
-                if norm(delta_p) < obj.epsilon
+                if norm(delta_p) < obj.epsilon || iter == obj.max_iter
+                    % 若已收敛，或已是最后一次迭代且无法继续往下求海森，
+                    % 则放弃移动，直接将当前点确认为最优估计点 (ML point)
                     break;
                 end
+                
+                % 位置更新 (未收敛且还有迭代次数时，才走向下一个求值点)
+                p_iter = p_iter + delta_p;
+                
             end % End of Optimization loop
             
             % ==== 2. 似然信息提取 ====
-            mu = p_iter - p_prior;
+            mu = p_iter - p_prior;  % 这里的 p_iter 绝对与下方的 Omega_Exact 严格对齐
             
             % 【修改核心点】：强制使用精确海森矩阵(Omega_Exact)作为似然信息矩阵 (等同于逆协方差)
             % 这是 MLKF 区别于 IEKF 且保证理论最优性的根本所在！
