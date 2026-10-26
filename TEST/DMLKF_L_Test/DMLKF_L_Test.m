@@ -23,7 +23,7 @@ data_ratio  = 0.2; % 数据集截取比例
 data_dir = 'E:\DMLKF_code\TEST\GN_compare\Data';
 data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_pure.mat', Vehicle_num, Anchor_num));
 
-res_dir = 'E:\DMLKF_code\TEST\DMLKF_CL_Test\RESULT';
+res_dir = 'E:\DMLKF_code\TEST\DMLKF_LC_Test\RESULT';
 if save_flag && ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
@@ -168,7 +168,7 @@ if run_flag || ~exist(res_mat_file, 'file')
         fprintf('====================================================\n');
         fprintf('[Experiment %d] 正在运行 DMLKF_LC (通信等级 L = %d)...\n', test_idx, L);
         
-        kf_dmlkf = DMLKF_LC(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, 200, L);
+        kf_dmlkf = DMLKF_L(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, 200, L);
         kf_dmlkf.beta_inv = 0.01;
         kf_dmlkf.epsilon  = 1e-8;    % 关键；不设就是类默认的 1e-4
         kf_dmlkf.max_step = 1;       % 可留 1 或 Inf，无影响

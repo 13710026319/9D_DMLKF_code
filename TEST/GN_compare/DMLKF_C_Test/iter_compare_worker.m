@@ -69,7 +69,7 @@ end
 function [rmse_p, mean_it, cap_frac, sec] = run_once(D, algo, max_iter, V2V_Mask, Anchor_Mask, cfg)
 switch algo
     case {'DMLKF', 'DMLKF_C'}
-        kf = DMLKF_C(D.V, D.A, D.anchors, D.dt, D.p0, D.v0, D.R0, V2V_Mask, max_iter);
+        kf = DMLKF(D.V, D.A, D.anchors, D.dt, D.p0, D.v0, D.R0, V2V_Mask, max_iter);
     %     kf.print_flag = 0;                       % 不在子进程里刷未收敛警告
     %     kf.beta_inv = 0.2;
     %     kf.max_step = Inf;

@@ -1,6 +1,7 @@
-classdef DMLKF_DN < handle
-    % DMLKF - 由DMLKF_D该来的DN框架，使用论文内的自适应步长
-    % 优化框架：已将原来的 Gauss-Newton (J^T*J) 近似修改为使用精确二阶导数的 Distributed Newton (DN) 框架
+classdef DMLKF_L < handle
+    % DMLKF_L - L-hop Distributed Maximum Likelihood Kalman Filter
+    % DMLKF_C 扩展的 L 级通信扩展版分布式精确牛顿卡尔曼滤波算法
+    % (纯精确牛顿法 + 固定一致性步长)
     
     properties
         Vehicle_num
@@ -19,69 +20,161 @@ classdef DMLKF_DN < handle
         beta_inv 
         max_step 
         
-        print_flag = 1; 
+        ALPHA_SAFETY = 1  % 步长安全缩放系数
+        alpha_const       % 依据拓扑算出的理论固定步长
+
+        diag_flag = 1       
+        last_iter = 0
+        last_err  = NaN
+        iter_hist = []      
+        res_hist  = []      
+        last_clip = 0       
+        clip_hist = []      
+        
+        print_flag = 0; % 打印残差收敛
         Nodes 
         
-        % 固定拓扑相关量，构造函数中一次性算好，update()/predict() 直接复用
-        N_list      % 每个节点的物理邻居集合
-        U_list      % 每个节点的局部索引集合 U_i = {i} U N_i（ego 恒排在第1位）
-        U_set       % U_set(i,c)=true 表示节点i维护变量c
-        W_c         % 逐变量 Metropolis-Hastings 权重矩阵
-        W_global    % 全局拓扑权重矩阵（用于 lambda_2 及步长追踪 Eq33）
-        lambda_2    % 全局通信图的代数连通度（第二大特征值）
+        % --- L-hop 固定拓扑相关量 ---
+        L_hop       % 设定的通信逻辑等级
+        V2V_Mask    % 物理通信连通掩码
+        N_list      % N_i^{(1)}: 每个节点的物理 1 跳邻居集合
+        U_list      % U_i: 每个节点的 L 跳逻辑索引集合 (ego 强制排在第1位)
+        U_set       % U_set(i,c)=true 表示节点 i 在追踪变量 c
+        W_c         % W_c(i,j,c): 逐变量的 MH 权重字典
+        W_cd        % W_cd(i,j,c,d): 交叉边(海森块)的 MH 权重字典
+        V_cd_size   % |V_{c,d}|: 全网同时追踪 (c,d) 的节点总数(预计算常数)
+        
+        W_global    
+        lambda_2    
     end
     
     methods
-        function obj = DMLKF_DN(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask)
-            % 因为 Ui 全程不变，拓扑只需要在这里解析一次
+        function obj = DMLKF_L(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, max_iter, L_hop, Noise)
+            if nargin < 9 || isempty(max_iter)
+                max_iter = 200;
+            end
+            if nargin < 10 || isempty(L_hop)
+                L_hop = 1; % 默认降级为 1-hop
+            end
+
             obj.Vehicle_num = Vehicle_num;
             obj.Anchor_num = Anchor_num;
             obj.anchors = anchors;
             obj.dt_imu = dt_imu;
             obj.g_vec = [0; 0; -9.81];
+            obj.L_hop = L_hop;
+            obj.V2V_Mask = V2V_Mask;
             
-            obj.IMU_Sigma_a = (0.05)^2 * eye(3);
-            obj.IMU_Sigma_w = (0.005)^2 * eye(3);
-            obj.UWB_sigma_anc = 0.1;
-            obj.UWB_sigma_rel = 0.1;
-            
-            obj.max_iter = 40;   
-            obj.epsilon  = 0.01; 
-            obj.beta_inv = 100;  
-            obj.max_step = 0.06;  
-            
+            % 传感器噪声基准参数
+            obj.IMU_Sigma_a = (0.25)^2 * eye(3);      
+            obj.IMU_Sigma_w = (0.025)^2 * eye(3);     
+            obj.UWB_sigma_anc = 0.18;                  
+            obj.UWB_sigma_rel = 0.18;   
+
+            % 外部噪声参数覆盖
+            if nargin >= 11 && ~isempty(Noise) && isstruct(Noise)
+                if isfield(Noise, 'IMU_Sigma_a'),   obj.IMU_Sigma_a   = Noise.IMU_Sigma_a;   end
+                if isfield(Noise, 'IMU_Sigma_w'),   obj.IMU_Sigma_w   = Noise.IMU_Sigma_w;   end
+                if isfield(Noise, 'UWB_sigma_anc'), obj.UWB_sigma_anc = Noise.UWB_sigma_anc; end
+                if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
+            end
+
+            obj.max_iter = max_iter;   
+            obj.epsilon  = 1e-4; 
+            obj.beta_inv = 50;  
+            obj.max_step = inf;  
+
             I_num = Vehicle_num;
             
-            % --- [固定拓扑解析] 只在构造时做一次 ---
+            % =========================================================
+            % [1] 固定物理拓扑与 L 跳逻辑索引集生成 (离线只算一次)
+            % =========================================================
             obj.N_list = cell(I_num, 1);
             obj.U_list = cell(I_num, 1);
             obj.U_set  = false(I_num, I_num);
+            
             for i = 1:I_num
-                neighbors = find(V2V_Mask(i, :) ~= 0);
-                neighbors = setdiff(neighbors, i);
-                obj.N_list{i} = neighbors;
-                u_i_nodes = [i, setdiff(neighbors, i)]; % ego 强制排第一位
+                obj.N_list{i} = setdiff(find(V2V_Mask(i, :) ~= 0), i);
+            end
+            
+            for i = 1:I_num
+                N_l = obj.N_list{i}; % 初始化为 1-hop 集合
+                % 递归生成 L-hop 集合
+                for l = 2:obj.L_hop
+                    N_next = N_l;
+                    for j = N_l
+                        N_next = union(N_next, obj.N_list{j});
+                    end
+                    N_l = setdiff(N_next, i);
+                end
+                u_i_nodes = [i, N_l]; % 自身(ego)必须强制排第一位
                 obj.U_list{i} = u_i_nodes;
                 obj.U_set(i, u_i_nodes) = true;
             end
             
-            % --- 构建 MH 权重矩阵 W_c (Eq 30) ---
+            % =========================================================
+            % [2] 预计算子网覆盖常数 |V_{c,d}| 
+            % =========================================================
+            obj.V_cd_size = zeros(I_num, I_num);
+            for c = 1:I_num
+                for d = 1:I_num
+                    % 只统计对角块和存在物理边的块
+                    if c == d || V2V_Mask(c, d) ~= 0
+                        count = 0;
+                        for v = 1:I_num
+                            if obj.U_set(v, c) && obj.U_set(v, d)
+                                count = count + 1;
+                            end
+                        end
+                        obj.V_cd_size(c, d) = count;
+                    end
+                end
+            end
+            
+            % =========================================================
+            % [3] 构建单变量 MH 权重字典 W_c
+            % =========================================================
             obj.W_c = zeros(I_num, I_num, I_num);
             for c = 1:I_num
                 Uc_nodes = find(obj.U_set(:, c));
-                for ii = 1:length(Uc_nodes)
-                    i = Uc_nodes(ii);
-                    deg_i = length(intersect(Uc_nodes, obj.N_list{i}));
+                for i = Uc_nodes'
+                    % d_c^i = | {l \in N_i^{(1)} | c \in U_l } |
+                    d_c_i = sum(obj.U_set(obj.N_list{i}, c));
                     sum_w = 0;
-                    neighbors_in_Uc = intersect(Uc_nodes, obj.N_list{i});
-                    for jj = 1:length(neighbors_in_Uc)
-                        j = neighbors_in_Uc(jj);
-                        deg_j = length(intersect(Uc_nodes, obj.N_list{j}));
-                        w = 1 / (1 + max(deg_i, deg_j));
+                    comm_neighbors = intersect(obj.N_list{i}, Uc_nodes);
+                    for j = comm_neighbors'
+                        d_c_j = sum(obj.U_set(obj.N_list{j}, c));
+                        w = 1 / (1 + max(d_c_i, d_c_j));
                         obj.W_c(i, j, c) = w;
                         sum_w = sum_w + w;
                     end
                     obj.W_c(i, i, c) = 1 - sum_w;
+                end
+            end
+            
+            % =========================================================
+            % [4] 构建双变量(海森矩阵) MH 权重字典 W_cd
+            % =========================================================
+            obj.W_cd = zeros(I_num, I_num, I_num, I_num);
+            for c = 1:I_num
+                for d = 1:I_num
+                    % 严格稀疏性限制：仅针对有物理测距边的变量对
+                    if c ~= d && V2V_Mask(c, d) == 0
+                        continue; 
+                    end
+                    Ucd_nodes = find(obj.U_set(:, c) & obj.U_set(:, d));
+                    for i = Ucd_nodes'
+                        d_cd_i = sum(obj.U_set(obj.N_list{i}, c) & obj.U_set(obj.N_list{i}, d));
+                        sum_w = 0;
+                        comm_neighbors = intersect(obj.N_list{i}, Ucd_nodes);
+                        for j = comm_neighbors'
+                            d_cd_j = sum(obj.U_set(obj.N_list{j}, c) & obj.U_set(obj.N_list{j}, d));
+                            w = 1 / (1 + max(d_cd_i, d_cd_j));
+                            obj.W_cd(i, j, c, d) = w;
+                            sum_w = sum_w + w;
+                        end
+                        obj.W_cd(i, i, c, d) = 1 - sum_w;
+                    end
                 end
             end
             
@@ -109,6 +202,10 @@ classdef DMLKF_DN < handle
                 obj.lambda_2 = 0.5;
             end
             obj.lambda_2 = max(0.01, min(0.99, obj.lambda_2));
+
+            % 静态稳定步长 (严格与 DMLKF_C 对齐)
+            obj.alpha_const = min(1.0, max(0.01, ...
+                obj.ALPHA_SAFETY * (1 - obj.lambda_2) / (1 + sqrt(obj.lambda_2))));
             
             % --- 节点状态与联合协方差初始化 ---
             Sigma_0 = blkdiag((0.1^2)*eye(3), (0.1^2)*eye(3), ((pi/180)^2)*eye(3));
@@ -125,12 +222,12 @@ classdef DMLKF_DN < handle
         end
         
         function predict(obj, acc_m, gyro_m)
+            % 先验传播：(t) -> (t+1|t)
             tau = obj.dt_imu;
             I3 = eye(3); O3 = zeros(3);
             Q_local = blkdiag(obj.IMU_Sigma_a, obj.IMU_Sigma_w);
             I_num = obj.Vehicle_num;
             
-            % 第一遍：算好每个节点自己的名义状态积分 + 局部 A_c, Q_c
             A_all = cell(I_num, 1);
             Q_all = cell(I_num, 1);
             
@@ -162,7 +259,7 @@ classdef DMLKF_DN < handle
                 Q_all{i} = (Q_i + Q_i') / 2;
             end
             
-            % 第二遍：按 U_i 拼装 Abar_i / Qbar_i，整体传播联合协方差 SigmaJ
+            % 按逻辑跟踪集 U_i 组装并整体推进巨型联合协方差
             for i = 1:I_num
                 Ui_nodes = obj.U_list{i};
                 Ui_len = length(Ui_nodes);
@@ -187,14 +284,11 @@ classdef DMLKF_DN < handle
             U_list = obj.U_list;
             N_list = obj.N_list;
             U_set  = obj.U_set;
-            W_c    = obj.W_c;
-            W_global = obj.W_global;
-            lambda_2 = obj.lambda_2;
             
             p_prior = zeros(3, I_num);
             for i = 1:I_num, p_prior(:, i) = obj.Nodes{i}.p; end
             
-            % --- D-Newton 初始化 ---
+            % --- 分布式精确牛顿法 (D-N) 初始化 ---
             S = zeros(3, I_num, I_num);
             G = zeros(3, I_num, I_num);
             H_mat = zeros(3, 3, I_num, I_num, I_num); 
@@ -207,24 +301,24 @@ classdef DMLKF_DN < handle
                     G(:, c, i) = g_init{c_idx};
                     for d_idx = 1:length(U_list{i})
                         d = U_list{i}(d_idx);
-                        H_mat(:, :, c, d, i) = h_init{c_idx, d_idx};
+                        % 仅对合法物理边赋值，非边严格保持为0
+                        if c == d || obj.V2V_Mask(c,d) ~= 0
+                            H_mat(:, :, c, d, i) = h_init{c_idx, d_idx};
+                        end
                     end
                 end
             end
 
-            % --- 分布式步长估计初始化 (Eq 33) ---
-            R_est = zeros(3, 3, I_num);
-            r_prev = zeros(3, 3, I_num);
-            alpha_nodes = zeros(I_num, 1);
-            for i = 1:I_num
-                R_est(:,:,i) = eye(3); 
-                alpha_nodes(i) = (1 - lambda_2) / (1 + sqrt(lambda_2)); 
-            end
-
-            % --- 分布式牛顿 (D-Newton) 迭代 ---
+            n_clip = 0;   
+            alpha_c = obj.alpha_const; % 使用固定一致性步长
+            
+            % ========================================================
+            % --- 分布式精确牛顿迭代 (Two-Phase Communication) ---
+            % ========================================================
             for iter = 1:obj.max_iter
                 S_next = S; G_next = zeros(size(G)); H_next = zeros(size(H_mat));
-                            
+                
+                % [Phase 1]: 状态一致性更新，计算 s_{k+1}
                 for i = 1:I_num
                     Ui_len = length(U_list{i});
                     if Ui_len == 0, continue; end
@@ -236,25 +330,28 @@ classdef DMLKF_DN < handle
                         G_blk(3*c_idx-2 : 3*c_idx) = G(:, c, i);
                         for d_idx = 1:Ui_len
                             d = U_list{i}(d_idx);
-                            H_blk(3*c_idx-2:3*c_idx, 3*d_idx-2:3*d_idx) = H_mat(:, :, c, d, i);
+                            if c == d || obj.V2V_Mask(c,d) ~= 0
+                                H_blk(3*c_idx-2:3*c_idx, 3*d_idx-2:3*d_idx) = H_mat(:, :, c, d, i);
+                            end
                         end
                     end
                     
+                    % 强制正定投影，保护搜索方向 (B(H)映射保护)
                     H_blk = (H_blk + H_blk') / 2;
-                    % 【注】精确牛顿法中 H_blk 可能是非正定的，这里必须投影回正定域以保证非升方向
                     [V, D] = eig(H_blk);
                     eig_vals = diag(D);
                     eig_vals(eig_vals < obj.beta_inv) = obj.beta_inv;
                     H_reg = V * diag(eig_vals) * V';
                     
                     ds = H_reg \ G_blk;
-                    
                     if any(isnan(ds(:))) || any(isinf(ds(:))), ds = zeros(size(ds)); end
+                    
                     for c_idx = 1:Ui_len
                         idx_r = 3*c_idx-2 : 3*c_idx;
                         step_c = ds(idx_r);
                         if norm(step_c) > obj.max_step
                             ds(idx_r) = step_c * (obj.max_step / norm(step_c));
+                            n_clip = n_clip + 1;
                         end
                     end
                     
@@ -263,13 +360,17 @@ classdef DMLKF_DN < handle
                         sum_s = zeros(3,1);
                         Uc_nodes = find(U_set(:, c));
                         comm_nodes = intersect(Uc_nodes, [i, N_list{i}]); 
-                        for j = comm_nodes'
-                            sum_s = sum_s + W_c(i, j, c) * S(:, c, j);
+                        % 安全遍历，免疫矩阵形状陷阱
+                        for j_idx = 1:length(comm_nodes)
+                            j = comm_nodes(j_idx);
+                            sum_s = sum_s + obj.W_c(i, j, c) * S(:, c, j);
                         end
-                        S_next(:, c, i) = sum_s - alpha_nodes(i) * ds(3*c_idx-2 : 3*c_idx);
+                        % 使用统一固定步长
+                        S_next(:, c, i) = sum_s - alpha_c * ds(3*c_idx-2 : 3*c_idx);
                     end
                 end
                 
+                % 评估基于最新状态 s_{k+1} 产生的局部梯度/精确海森差值
                 g_new_all = cell(I_num,1); h_new_all = cell(I_num,1);
                 g_old_all = cell(I_num,1); h_old_all = cell(I_num,1);
                 for i = 1:I_num
@@ -287,6 +388,7 @@ classdef DMLKF_DN < handle
                     g_old_all{i} = g_old; h_old_all{i} = h_old;
                 end
                 
+                % [Phase 2]: 梯度和海森矩阵的动态追踪更新 (G_{k+1}, H_{k+1})
                 for i = 1:I_num
                     Ui_len = length(U_list{i});
                     if Ui_len == 0, continue; end
@@ -296,40 +398,35 @@ classdef DMLKF_DN < handle
                         Uc_nodes = find(U_set(:, c));
                         comm_nodes_c = intersect(Uc_nodes, [i, N_list{i}]); 
                         
+                        % 梯度追踪更新
                         sum_g = zeros(3,1);
-                        for j = comm_nodes_c'
+                        for j_idx = 1:length(comm_nodes_c)
+                            j = comm_nodes_c(j_idx);
                             idx_c_in_j = find(U_list{j} == c);
                             term_g = G(:, c, j) + g_new_all{j}{idx_c_in_j} - g_old_all{j}{idx_c_in_j};
-                            sum_g = sum_g + W_c(i, j, c) * term_g;
+                            sum_g = sum_g + obj.W_c(i, j, c) * term_g;
                         end
                         G_next(:, c, i) = sum_g;
                         
+                        % 海森矩阵追踪更新 (严格实施物理图稀疏限制)
                         for d_idx = 1:Ui_len
                             d = U_list{i}(d_idx);
+                            if c ~= d && obj.V2V_Mask(c,d) == 0
+                                continue; 
+                            end
+                            
                             Ud_nodes = find(U_set(:, d));
                             Ucd_nodes = intersect(Uc_nodes, Ud_nodes);
                             comm_nodes_cd = intersect(Ucd_nodes, [i, N_list{i}]);
                             
                             sum_h = zeros(3,3);
-                            for j = comm_nodes_cd'
+                            for j_idx = 1:length(comm_nodes_cd)
+                                j = comm_nodes_cd(j_idx);
                                 idx_c_j = find(U_list{j} == c);
                                 idx_d_j = find(U_list{j} == d);
                                 term_h = H_mat(:, :, c, d, j) + h_new_all{j}{idx_c_j, idx_d_j} - h_old_all{j}{idx_c_j, idx_d_j};
                                 
-                                deg_i_cd = length(intersect(Ucd_nodes, N_list{i})); 
-                                if j ~= i
-                                    deg_j_cd = length(intersect(Ucd_nodes, N_list{j}));
-                                    w_cd = 1 / (1 + max(deg_i_cd, deg_j_cd));
-                                else
-                                    sum_w_l = 0;
-                                    neighbors_in_Ucd = intersect(Ucd_nodes, N_list{i});
-                                    for l_idx = 1:length(neighbors_in_Ucd)
-                                        l = neighbors_in_Ucd(l_idx);
-                                        deg_l_cd = length(intersect(Ucd_nodes, N_list{l}));
-                                        sum_w_l = sum_w_l + 1 / (1 + max(deg_i_cd, deg_l_cd));
-                                    end
-                                    w_cd = 1 - sum_w_l;
-                                end
+                                w_cd = obj.W_cd(i, j, c, d);
                                 sum_h = sum_h + w_cd * term_h;
                             end
                             H_next(:, :, c, d, i) = sum_h;
@@ -337,56 +434,25 @@ classdef DMLKF_DN < handle
                     end
                 end
                 
-                % --- 分布式理论最优步长更新 ---
-                R_est_next = zeros(3, 3, I_num);
-                for i = 1:I_num
-                    if isempty(U_list{i}), continue; end
-                    idx_ego = find(U_list{i} == i);
-                    if isempty(idx_ego), continue; end
-                    
-                    h_local_ego = h_new_all{i}{idx_ego, idx_ego}; 
-                    H_cons_ego = H_next(:, :, idx_ego, idx_ego, i); 
-                    H_cons_reg = H_cons_ego + obj.beta_inv * eye(3);
-                    r_curr = h_local_ego / H_cons_reg; 
-                    
-                    if iter == 1
-                        r_prev(:,:,i) = r_curr; 
-                    end
-                    
-                    sum_R = zeros(3,3);
-                    comm_nodes_global = [i, N_list{i}]; 
-                    for j = comm_nodes_global
-                        sum_R = sum_R + W_global(i, j) * R_est(:,:,j);
-                    end
-                    
-                    R_est_next(:,:,i) = sum_R + r_curr - r_prev(:,:,i);
-                    r_prev(:,:,i) = r_curr; 
-                    
-                    R_i = R_est_next(:,:,i);
-                    try
-                        norm_R = norm(R_i, 2);
-                        norm_invR = norm(inv(R_i + 1e-8*eye(3)), 2);
-                        s_i = 0.5 * (norm_R + 1 / norm_invR);
-                    catch
-                        s_i = 1.0;
-                    end
-                    s_i = max(0.1, min(10, s_i)); 
-                    
-                    alpha_opt = (1 - lambda_2) / (1 + sqrt(s_i * lambda_2));
-                    alpha_nodes(i) = max(0.05, min(1.0, alpha_opt)); 
-                end
-                R_est = R_est_next;
-
                 err = max(abs(S_next(:) - S(:)));
                 S = S_next; G = G_next; H_mat = H_next;
                 if err < obj.epsilon, break; end
+            end
+
+            if obj.diag_flag
+                obj.last_iter = iter;
+                obj.last_err  = err;
+                obj.iter_hist(end+1, 1) = iter;
+                obj.res_hist(end+1, 1)  = err;
+                obj.last_clip = n_clip;
+                obj.clip_hist(end+1, 1) = n_clip;
             end
             if iter == obj.max_iter && err >= obj.epsilon && obj.print_flag
                 fprintf('警告: 节点未在%d次内收敛, 残差=%.6f\n', obj.max_iter, err);
             end
             
             % ========================================================
-            % --- 5. Posterior Fusion ---
+            % --- 5. Posterior Information Fusion & Ego Retraction ---
             % ========================================================
             Sigma_prior_cache = cell(I_num, 1);
             for c = 1:I_num
@@ -397,30 +463,36 @@ classdef DMLKF_DN < handle
                 Ui_len = length(U_list{i});
                 if Ui_len == 0, continue; end
                 
+                % --- 似然信息重构与升维 ---
                 Lambda_3D = zeros(3*Ui_len, 3*Ui_len);
                 s_dn_vec = zeros(3*Ui_len, 1);
                 for c_idx = 1:Ui_len
                     c = U_list{i}(c_idx);
                     s_dn_vec(3*c_idx-2 : 3*c_idx) = S(:, c, i);
-                    Uc_nodes = find(U_set(:, c));
+                    
                     for d_idx = 1:Ui_len
                         d = U_list{i}(d_idx);
-                        Ud_nodes = find(U_set(:, d));
-                        Ucd_size = length(intersect(Uc_nodes, Ud_nodes));
-                        Lambda_3D(3*c_idx-2:3*c_idx, 3*d_idx-2:3*d_idx) = Ucd_size * H_mat(:, :, c, d, i);
+                        % 仅对存在物理联系的块进行重构
+                        if c == d || obj.V2V_Mask(c, d) ~= 0
+                            vcd_size = obj.V_cd_size(c, d);
+                            % 直接使用全网追踪的真实海森矩阵
+                            Lambda_3D(3*c_idx-2:3*c_idx, 3*d_idx-2:3*d_idx) = vcd_size * H_mat(:, :, c, d, i);
+                        end
                     end
                 end
                 Lambda_3D = (Lambda_3D + Lambda_3D') / 2; 
                 
+                % [重要修复] 正定截断对齐 CMLKF 1e-6 严格标准 (B(H)映射)
                 [V_lam, D_lam] = eig(Lambda_3D);
                 eig_lam = diag(D_lam);
-                eig_lam(eig_lam < 0) = 0;   
+                eig_lam(eig_lam < 1e-6) = 1e-6;   
                 Lambda_3D = V_lam * diag(eig_lam) * V_lam';
                 
                 Pi_mat = kron(eye(Ui_len), [eye(3), zeros(3,3), zeros(3,3)]);
                 Lambda_9D = Pi_mat' * Lambda_3D * Pi_mat;
                 lambda_9D = Pi_mat' * (Lambda_3D * s_dn_vec);
                 
+                % --- 精度矩阵求逆与后验融合 ---
                 dim_i = 9 * Ui_len;
                 Sigma_prior_joint = Sigma_prior_cache{i};
                 Sigma_prior_joint = (Sigma_prior_joint + Sigma_prior_joint') / 2 + 1e-12 * eye(dim_i);
@@ -439,8 +511,8 @@ classdef DMLKF_DN < handle
                     SigmaJ_post = Sigma_prior_cache{i};
                 end
                 
+                % --- 本车名义状态回退 (Ego Retraction) ---
                 theta_ego = theta_joint(1:9);
-                
                 dp   = theta_ego(1:3);
                 dv   = theta_ego(4:6);
                 dphi = theta_ego(7:9);
@@ -448,14 +520,25 @@ classdef DMLKF_DN < handle
                 obj.Nodes{i}.p = obj.Nodes{i}.p + dp;
                 obj.Nodes{i}.v = obj.Nodes{i}.v + dv;
                 R_new = obj.Nodes{i}.R * obj.exp_SO3(dphi);
-                [U, ~, V] = svd(R_new);
-                obj.Nodes{i}.R = U * V';
+                [U_svd, ~, V_svd] = svd(R_new);
+                obj.Nodes{i}.R = U_svd * V_svd';
                 
-                obj.Nodes{i}.SigmaJ = SigmaJ_post;
+                % --- ESKF 协方差重置 (Reset Jacobian) ---
+                G_reset_joint = eye(dim_i);
+                for c_idx = 1:Ui_len
+                    dphi_c = theta_joint(9*c_idx-2 : 9*c_idx);
+                    G_reset_joint(9*c_idx-2 : 9*c_idx, 9*c_idx-2 : 9*c_idx) = eye(3) - 0.5 * obj.skew(dphi_c);
+                end
+                
+                SigmaJ_post = G_reset_joint * SigmaJ_post * G_reset_joint';
+                obj.Nodes{i}.SigmaJ = (SigmaJ_post + SigmaJ_post') / 2;
             end
         end
         
         function [g_list, h_list] = eval_local_cost(obj, i, s_vec, Ui_nodes, p_prior_all, uwb_anc, uwb_rel)
+            % ==============================================================
+            % 计算局部的代价函数梯度，并输出精确海森 (包含几何曲率二阶导)
+            % ==============================================================
             num_vars = length(Ui_nodes);
             g_list = cell(num_vars, 1);
             h_list = cell(num_vars, num_vars);
@@ -465,6 +548,7 @@ classdef DMLKF_DN < handle
             idx_ego = find(Ui_nodes == i);
             p_i = p_prior_all(:, i) + s_vec(3*idx_ego-2 : 3*idx_ego);
             
+            % 1. 基站绝对测距
             for k = 1:obj.Anchor_num
                 z = uwb_anc(i, k);
                 if ~isnan(z)
@@ -475,9 +559,7 @@ classdef DMLKF_DN < handle
                     sig2 = obj.UWB_sigma_anc^2;
                     grad = (1/sig2) * (1 - z/d) * delta; 
                     
-                    % ==========================================
-                    % [DGN -> DN 修改] 加入完整的二阶导数项 (1-z/d)*(I-uu^T)
-                    % ==========================================
+                    % 严格使用精确二阶海森矩阵 (MLKF 要求)
                     hess = (1/sig2) * (u_vec * u_vec' + (1 - z/d) * (eye(3) - u_vec * u_vec')); 
                     
                     g_list{idx_ego} = g_list{idx_ego} + grad;
@@ -485,9 +567,11 @@ classdef DMLKF_DN < handle
                 end
             end
             
-            for j = 1:obj.Vehicle_num
+            % 2. 相对节点测距 (完全免疫向量行列形状陷阱的安全遍历法)
+            for j_idx = 1:length(obj.N_list{i})
+                j = obj.N_list{i}(j_idx);
                 z = uwb_rel(i, j);
-                if ~isnan(z) && j ~= i
+                if ~isnan(z)
                     idx_nbr = find(Ui_nodes == j);
                     p_j = p_prior_all(:, j) + s_vec(3*idx_nbr-2 : 3*idx_nbr);
                     delta = p_i - p_j;
@@ -498,9 +582,7 @@ classdef DMLKF_DN < handle
                     g_i =  (1/sig2) * (1 - z/d) * delta;
                     g_j = -(1/sig2) * (1 - z/d) * delta;
                     
-                    % ==========================================
-                    % [DGN -> DN 修改] 加入完整的二阶导数项 (1-z/d)*(I-uu^T)
-                    % ==========================================
+                    % 严格使用精确二阶海森矩阵 (MLKF 要求)
                     h_ii = (1/sig2) * (u_vec * u_vec' + (1 - z/d) * (eye(3) - u_vec * u_vec')); 
                     
                     g_list{idx_ego} = g_list{idx_ego} + g_i;

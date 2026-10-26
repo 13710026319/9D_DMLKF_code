@@ -5,19 +5,19 @@ clc; clear; close all;
 %% 1. 测试参数与运行配置
 Vehicle_num = 8;            
 Anchor_num  = 4;     
-neighbor_k  = 7 ; % [修改] 邻居数 (避免与下方主循环的 k 变量发生冲突)
+neighbor_k  = 4 ; % [修改] 邻居数 (避免与下方主循环的 k 变量发生冲突)
 run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
 save_flag   = 0;
 
-% 故意保留未知零偏以破坏先验 (1.0为完全补偿，0.7为补偿70%保留30%漂移)
-bias_comp_ratio = 1; 
+% 0.7为保留未知零偏以破坏先验 (1.0为完全补偿，0.7为补偿70%保留30%漂移)
+bias_comp_ratio = 0.7; 
 
 % 控制截取数据集的比例 (例如 0.8 表示只跑前 80% 的数据，1.0为全部)
 data_ratio  = 0.2;
 
 % 路径配置 (修改为 DEKF 的保存路径)
 data_dir = 'E:\DMLKF_code\Data';
-
+res_dir  = 'E:\DMLKF_code\EKF\DEKF\RESULT';
 if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end

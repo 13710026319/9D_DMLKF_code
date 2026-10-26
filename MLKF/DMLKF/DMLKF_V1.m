@@ -1,9 +1,10 @@
 classdef DMLKF_V1 < handle
     % DMLKF_V1 - Change 1 理论验证版 (Oracle Bound) 与CMLKF对比
-
-    % 1. 优化步：使用集中式 GN 解出完美的全局 MLE 状态和联合海森矩阵。
+    % 【优化器同步】：纯精确牛顿法 (Exact Newton)，严格对齐 CMLKF(is_GN=0)
+    %
+    % 1. 优化步：使用集中式精确牛顿解出完美的全局 MLE 状态和真实的联合二阶海森矩阵。
     % 2. 预测步：构建全局 A 和 Q，自然传递节点与邻居之间的交叉协方差。
-    % 3. 更新步：彻底抛弃舒尔补边缘化！直接提取包含自身的邻居的局部协方差块，
+    % 3. 更新步：彻底抛弃舒尔补边缘化！直接提取包含自身的邻居的局部协方差块。
    
     properties
         Vehicle_num
@@ -19,7 +20,7 @@ classdef DMLKF_V1 < handle
         
         max_iter
         epsilon
-        beta_inv % LM 阻尼系数 (保证 H 矩阵正定下限)
+        beta_inv % 正定投影/阻尼截断系数 (保证 H 矩阵特征值下限)
         max_step % 防爆墙：牛顿迭代最大移动阈值
         
         Nodes 
@@ -38,11 +39,6 @@ classdef DMLKF_V1 < handle
             obj.UWB_sigma_anc = 0.18;                  
             obj.UWB_sigma_rel = 0.18;   
 
-            % ==== [可选] 外部噪声参数输入 ====
-            % 用法： N.IMU_Sigma_a = (0.05)^2*eye(3);  N.IMU_Sigma_w = (0.005)^2*eye(3);
-            %        N.UWB_sigma_anc = 0.18;  N.UWB_sigma_rel = 0.18;
-            %        kf = DMLKF_V1(V, A, anchors, dt, p0, v0, R0, N);
-            % 只覆盖传入的字段；不传（或传空）时完全保持上面的默认值，行为与以前一致。
             if nargin >= 8 && ~isempty(Noise) && isstruct(Noise)
                 if isfield(Noise, 'IMU_Sigma_a'),   obj.IMU_Sigma_a   = Noise.IMU_Sigma_a;   end
                 if isfield(Noise, 'IMU_Sigma_w'),   obj.IMU_Sigma_w   = Noise.IMU_Sigma_w;   end
@@ -52,7 +48,7 @@ classdef DMLKF_V1 < handle
             
             obj.max_iter = 40;
             obj.epsilon  = 1e-4;
-            obj.beta_inv = 50;  
+            obj.beta_inv = 30;  % 与CMLKF对齐的阻尼值 
             obj.max_step = Inf; 
             
             % [修改点] 初始化：每个节点维护一个全网的 9I x 9I 协方差矩阵视图
@@ -125,7 +121,7 @@ classdef DMLKF_V1 < handle
             end
             
             % ==========================================================
-            % 1. 上帝视角的完美集中式 MLE 优化 (保持不变)
+            % 1. 上帝视角的完美集中式 MLE 优化 (精确牛顿法)
             % 获取无优化近似误差的完美全局海森 H_glob_final 与状态 p_MLE_perfect
             % ==========================================================
             p_iter = p_prior;
@@ -148,7 +144,9 @@ classdef DMLKF_V1 < handle
                             
                             sig2 = obj.UWB_sigma_anc^2;
                             grad = (1/sig2) * (1 - z/d) * delta;
-                            hess = (1/sig2) * (u_vec * u_vec'); 
+                            
+                            % 【精确牛顿】：GN项 + 二阶曲率项
+                            hess = (1/sig2) * (u_vec * u_vec' + (1 - z/d) * (eye(3) - u_vec * u_vec')); 
                             
                             idx_i = 3*i-2 : 3*i;
                             g_glob(idx_i) = g_glob(idx_i) + grad;
@@ -168,7 +166,9 @@ classdef DMLKF_V1 < handle
                             sig2 = obj.UWB_sigma_rel^2;
                             g_i =  (1/sig2) * (1 - z/d) * delta;
                             g_j = -(1/sig2) * (1 - z/d) * delta;
-                            hess = (1/sig2) * (u_vec * u_vec');
+                            
+                            % 【精确牛顿】：GN项 + 二阶曲率项
+                            hess = (1/sig2) * (u_vec * u_vec' + (1 - z/d) * (eye(3) - u_vec * u_vec'));
                             
                             idx_i = 3*i-2 : 3*i;
                             idx_j = 3*j-2 : 3*j;
@@ -185,25 +185,37 @@ classdef DMLKF_V1 < handle
                 end
                 
                 H_glob = (H_glob + H_glob') / 2;
+                
+                % 此处记录下当前点的严格精确海森矩阵
                 H_glob_final = H_glob; 
                 
-                H_reg = H_glob + obj.beta_inv * eye(3*I_num);
+                % 【正定投影】：求解更新步长前，通过特征值截断保护防止负曲率带来的发散
+                [V_eig, D_eig] = eig(H_glob);
+                eig_vals = diag(D_eig);
+                eig_vals(eig_vals < obj.beta_inv) = obj.beta_inv;
+                H_reg = V_eig * diag(eig_vals) * V_eig';
+                
                 dp_glob = H_reg \ g_glob;
                 
                 if any(isnan(dp_glob(:))) || any(isinf(dp_glob(:))), dp_glob = zeros(3*I_num, 1); end
+                
                 step_norm = norm(dp_glob);
                 if step_norm > obj.max_step
                     dp_glob = dp_glob * (obj.max_step / step_norm);
                 end
                 
-                % 状态更新
-                p_iter = p_iter - reshape(dp_glob, 3, I_num);
-                
-                % 将原来的 max(abs(dp_glob)) 改为 norm(dp_glob)
-                if norm(dp_glob) < obj.epsilon
+                % ==========================================================
+                % 【核心修复】：收敛判断提前，保证最终报告的坐标与 H_glob_final 严格对齐
+                % ==========================================================
+                if norm(dp_glob) < obj.epsilon || iter == obj.max_iter
                     break; 
                 end
-            end
+                
+                % 状态更新 (注意：目标函数是求极小，g_glob为正梯度，因此这里是减法)
+                p_iter = p_iter - reshape(dp_glob, 3, I_num);
+                
+            end % End of optimization
+            
             p_MLE_perfect = p_iter; 
             
             % ==========================================================
@@ -228,12 +240,13 @@ classdef DMLKF_V1 < handle
                 end
                 
                 % A. 从完美集中式海森中，精准抠出属于 U_i 的局部海森阵
-                % 由于提取顺序服从 U_i，ego 节点 i 必然位于矩阵左上角！
                 Lambda_3D = H_glob_final(idx_3D_Ui, idx_3D_Ui);
                 Lambda_3D = (Lambda_3D + Lambda_3D') / 2;
                 
+                % 【严格对齐 CMLKF】：强制正定截断下限为 1e-6，实现 B(H) 映射
                 [V_lam, D_lam] = eig(Lambda_3D);
-                eig_lam = diag(D_lam); eig_lam(eig_lam < 0) = 0;
+                eig_lam = diag(D_lam); 
+                eig_lam(eig_lam < 1e-6) = 1e-6; 
                 Lambda_3D = V_lam * diag(eig_lam) * V_lam';
                 
                 % 从集中式 MLE 解中提取该局部的完美误差向量
@@ -243,19 +256,16 @@ classdef DMLKF_V1 < handle
                     s_dn_vec(3*c_idx-2 : 3*c_idx) = p_MLE_perfect(:, c) - p_prior(:, c);
                 end
                 
-                % B. 将 3D 位置信息提升至 9D 联合空间 (用 0 填充速度和姿态块)
+                % B. 将 3D 位置信息提升至 9D 联合空间
                 Pi_mat = kron(eye(Ui_len), [eye(3), zeros(3,3), zeros(3,3)]);
                 Lambda_9D = Pi_mat' * Lambda_3D * Pi_mat;
                 lambda_9D = Pi_mat' * (Lambda_3D * s_dn_vec);
                 
                 % C. [Change 1 核心] 直接从本地全局视图提取包含所有交叉协方差的真实先验块
-                % 这彻底抛弃了导致发散的完全对角阵假设 (Block-diagonal Prior)
                 Sigma_prior_Ui = obj.Nodes{i}.Sigma_full(idx_9D_Ui, idx_9D_Ui);
                 Sigma_prior_Ui = (Sigma_prior_Ui + Sigma_prior_Ui') / 2 + 1e-12 * eye(9*Ui_len);
                 
                 % D. [Change 1 核心] 执行次优融合 (Suboptimal Fusion)
-                % 抛弃舒尔补边缘化！直接使用完整局部逆矩阵相加。
-                % 若拓扑为全连接(U_i 包含所有人)，此处数学公式严格等于集中式 Information Filter
                 Gamma_prior_Ui = eye(size(Sigma_prior_Ui)) / Sigma_prior_Ui;
                 Gamma_post_Ui  = Gamma_prior_Ui + Lambda_9D;
                 Gamma_post_Ui  = (Gamma_post_Ui + Gamma_post_Ui') / 2 + 1e-10 * eye(9*Ui_len);
@@ -283,9 +293,7 @@ classdef DMLKF_V1 < handle
                 [U, ~, V] = svd(R_new);
                 obj.Nodes{i}.R = U * V';
                 
-                % F. [Change 1 核心] 更新本地的世界观缓存
-                % 将融合后的完整块(包含保留的交叉协方差)写回本地全局视图，
-                % 这就是"局部认知不一致"发生的根源(节点互相写不同块)，但完全保证了数学上的保守性。
+                % F. 更新本地的世界观缓存
                 obj.Nodes{i}.Sigma_full(idx_9D_Ui, idx_9D_Ui) = Sigma_post_Ui;
             end
         end

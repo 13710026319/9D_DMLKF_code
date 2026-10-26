@@ -6,7 +6,7 @@ clc; clear; close all;
 %% 1. 实验参数与运行配置
 Vehicle_num = 8;            
 Anchor_num  = 4;             
-K_test_list = 4; % 邻居数
+K_test_list = 4:7; % 邻居数
 
 % 保留一定比例的零偏误差以破坏 IMU 先验，凸显测距优化优势 (1.0为完全补偿, 0.7为保留30%漂移)
 bias_comp_ratio = 1; 
@@ -72,7 +72,7 @@ kf_cmlkf = CMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
 
 % 降低阻尼，快速查到CMLKF在当前数据集下最优的结果
 kf_cmlkf.beta_inv = 0.01;
-kf_cmlkf.max_iter = 1;
+kf_cmlkf.max_iter = 30;
 
 % 预分配估计容器，长度限制为 N_steps
 est_p_cmlkf = zeros(N_steps, 3, Vehicle_num);

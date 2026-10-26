@@ -35,7 +35,7 @@ classdef CMLKF < handle
         function obj = CMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, Noise)
             % 控制优化迭代步的搜索方式，1:高斯牛顿(GN), 0:精确牛顿(N)
             % 注: 该标志不再影响最终的信息矩阵，最终强制使用精确海森
-            obj.is_GN = 1;
+            obj.is_GN = 0;
 
             % 构造函数：初始化系统维度、参数与初始状态
             obj.Vehicle_num = Vehicle_num;
