@@ -60,8 +60,8 @@ end
 kf = CEKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
 kf.IMU_Sigma_a   = (0.05)^2  * eye(3);
 kf.IMU_Sigma_w   = (0.005)^2 * eye(3);
-kf.UWB_sigma_anc = 0.01;
-kf.UWB_sigma_rel = 0.01;
+kf.UWB_sigma_anc = 0.05;
+kf.UWB_sigma_rel = 0.05;
 
 % 预分配估计结果存储空间 (自动适用截断后的 N_steps)
 est_p = zeros(N_steps, 3, Vehicle_num);

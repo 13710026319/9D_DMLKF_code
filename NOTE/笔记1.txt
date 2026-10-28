@@ -34,7 +34,7 @@
 3、DMLKC_C修改：删除is_GN，默认使用牛顿法，在DMLKF_C与DMLKFV1的对比中可以验证随迭代次数提升而收敛到两者相同。测试发现直接用DMLKF_C似乎比DMLKF_D在对比DEKF时更好，似乎意味着_D版本没有存在意义了。
 4、DMLKF_LC修改：删除is_GN，默认使用牛顿法，在DMLKF_CL_Test.m下与CMLKF测试发现L级通信机制成功实现
 5、删除DMLKF_D，将DMLKF_C等其他DMLKF含C,D结尾的都改为DMLKF，不区分CD版本
-6、建议在各个测试脚本内传入噪声数值比较好，保证集中式、分布式之间的公平对比。集中式下参考”obj.IMU_Sigma_a = (0.25)^2 * eye(3);  obj.IMU_Sigma_w = (0.025)^2 * eye(3);   obj.UWB_sigma_anc = 0.18;  obj.UWB_sigma_rel = 0.18; “；分布式下参考“kf.IMU_Sigma_a = (0.07)^2 * eye(3); kf.IMU_Sigma_w = (0.007)^2 * eye(3); kf.UWB_sigma_anc = 0.1; kf.UWB_sigma_rel = 0.1;”。此外max_iter，epsilon, beta_inv, max_step(这个一般可以设为inf)也要关注一下
+6、建议在各个测试脚本内传入噪声数值比较好，保证集中式、分布式之间的公平对比。集中式下参考”obj.IMU_Sigma_a = (0.25)^2 * eye(3);  obj.IMU_Sigma_w = (0.025)^2 * eye(3);   obj.UWB_sigma_anc = 0.18;  obj.UWB_sigma_rel = 0.18; “；分布式下参考“kf.IMU_Sigma_a = (0.07)^2 * eye(3); kf.IMU_Sigma_w = (0.007)^2 * eye(3); kf.UWB_sigma_anc = 0.1; kf.UWB_sigma_rel = 0.1;”。此外max_iter，epsilon, beta_inv也要关注一下 ( max_step这个一般可以设为inf)
 
 
 

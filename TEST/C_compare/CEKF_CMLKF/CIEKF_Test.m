@@ -1,27 +1,27 @@
-% CMLKF_Test.m 
-% CMLKF集中式最大似然卡尔曼滤波算法 - 测试与评价脚本
+% CIEKF_Test.m 
+% CIEKF集中式迭代扩展卡尔曼滤波算法 - 测试与评价脚本
 clc; clear; close all;
 
 %% 1. 测试参数配置
 Vehicle_num = 8;            
 Anchor_num = 10;             
 run_flag = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行并覆盖
-save_flag = 0; 
+save_flag = 0;
 
 % 完全扣除 IMU 零偏 (1.0 为完全补偿)
 bias_comp_ratio = 0.7; 
 
-% [新增] 控制截取数据集的比例 (例如 0.2 表示只跑前 20% 的数据，1.0为全部)
-data_ratio = 1; 
+% 控制截取数据集的比例 (例如 0.2 表示只跑前 20% 的数据，1.0为全部)
+data_ratio = 1;
 
-% 路径配置
+% 路径配置 [修改为 CIEKF 的路径]
 data_dir = 'E:\DMLKF_code\Data';
-res_dir  = 'E:\DMLKF_code\MLKF\CMLKF\RESULT';
+res_dir  = 'E:\DMLKF_code\IEKF\CIEKF\RESULT'; % 指向 CIEKF 的结果目录
 if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
 data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
-res_file  = fullfile(res_dir, sprintf('CMLKF_Veh%d_Anc%d.mat', Vehicle_num, Anchor_num));
+res_file  = fullfile(res_dir, sprintf('CIEKF_Veh%d_Anc%d.mat', Vehicle_num, Anchor_num));
 
 %% 2. 检查结果文件是否存在 (run_flag 机制)
 if run_flag == 0 && exist(res_file, 'file')
@@ -36,9 +36,9 @@ if ~exist(data_file, 'file')
     error('未找到数据集文件: %s\n请先运行生成脚本生成该数据！', data_file);
 end
 load(data_file, 'trajectories', 'anchors', 'IMU_noise_params', 'UWB_noise_params');
-fprintf('数据集加载成功，开始运行 CMLKF 算法...\n');
+fprintf('数据集加载成功，开始运行 CIEKF 算法...\n');
 
-% [修改] 根据截取比例计算实际运行步数
+% 根据截取比例计算实际运行步数
 N_steps_total = length(trajectories.V1.Time_true);
 N_steps = max(2, round(N_steps_total * data_ratio)); % 计算截断步数(至少保证有2步)
 fprintf('>> 实验设定的数据截取比例: %.1f%%\n', data_ratio * 100);
@@ -46,7 +46,7 @@ fprintf('>> 实际运行步数 / 总步数: %d / %d\n', N_steps, N_steps_total);
 
 dt_imu = trajectories.V1.Time_true(2) - trajectories.V1.Time_true(1);
 
-%% 4. 初始化 CMLKF 滤波器
+%% 4. 初始化 CIEKF 滤波器
 p0 = zeros(3 * Vehicle_num, 1);
 v0 = zeros(3 * Vehicle_num, 1);
 R0 = zeros(3, 3, Vehicle_num);
@@ -56,11 +56,19 @@ for i = 1:Vehicle_num
     v0(3*i-2 : 3*i) = [trajectories.(v_name).Vx_true(1); trajectories.(v_name).Vy_true(1); trajectories.(v_name).Vz_true(1)];
     R0(:, :, i)     = trajectories.(v_name).R_true(:, :, 1);
 end
-kf = CMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
+
+% [核心修改] 实例化 CIEKF
+kf = CIEKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
+
+% 噪声参数设置
 kf.IMU_Sigma_a   = (0.05)^2  * eye(3);
 kf.IMU_Sigma_w   = (0.005)^2 * eye(3);
-kf.UWB_sigma_anc = 0.01;
-kf.UWB_sigma_rel = 0.01;
+kf.UWB_sigma_anc = 0.05;
+kf.UWB_sigma_rel = 0.05;
+
+% [新增] CIEKF 特有的迭代参数 (可以根据测试情况微调)
+kf.max_iter = 10;       % 高斯-牛顿最大迭代次数
+kf.tol      = 1e-4;    % 迭代收敛阈值 (状态更新量范数)
 
 % 预分配估计结果存储空间 (自动适用截断后的 N_steps)
 est_p = zeros(N_steps, 3, Vehicle_num);
@@ -73,7 +81,7 @@ for i = 1:Vehicle_num
 end
 
 %% 5. 滤波主循环
-uwb_idx = 2; % UWB 从第2个历元(idx_uwb)开始融合，第1个是初始时刻
+uwb_idx = 2; % UWB 从第2个历元开始融合
 UWB_Time_Vec = trajectories.V1.UWB_Anchor(:, 1);
 for k = 2:N_steps
     % --- A. 100Hz 预测过程 (扣除偏置) ---
@@ -81,7 +89,7 @@ for k = 2:N_steps
     gyro_m = zeros(3, Vehicle_num);
     for i = 1:Vehicle_num
         v_name = sprintf('V%d', i);
-        % 在此处模拟IMU扰动以及一定的偏置累加影响 运行时间越长差距越大
+        % 在此处模拟IMU扰动以及一定的偏置累加影响
         acc_m(:, i)  = trajectories.(v_name).IMU_acc_m(k-1, :)' - bias_comp_ratio*trajectories.(v_name).IMU_bias_a_true(k-1, :)';
         gyro_m(:, i) = trajectories.(v_name).IMU_gyro_m(k-1, :)' - bias_comp_ratio*trajectories.(v_name).IMU_bias_w_true(k-1, :)';
     end
@@ -97,6 +105,7 @@ for k = 2:N_steps
             uwb_anc(i, :) = trajectories.(v_name).UWB_Anchor(uwb_idx, 2:end);
             uwb_rel(i, :) = trajectories.(v_name).UWB_Relative(uwb_idx, 2:end);
         end
+        % 调用 CIEKF 内部进行高斯-牛顿迭代更新
         kf.update(uwb_anc, uwb_rel);
         uwb_idx = uwb_idx + 1;
     end
@@ -108,7 +117,7 @@ for k = 2:N_steps
         est_R(:, :, i, k) = kf.R(:, :, i);
     end
     
-    % 可选：加入进度打印
+    % 加入进度打印
     if mod(k, 2000) == 0
         fprintf('已处理: %d / %d 步...\n', k, N_steps);
     end
@@ -121,7 +130,7 @@ rmse_att = zeros(Vehicle_num, 1);
 for i = 1:Vehicle_num
     v_name = sprintf('V%d', i);
     
-    % [修改] 截取前 N_steps 的轨迹真值，保证与 est_p 的维度一致
+    % 截取前 N_steps 的轨迹真值，保证与 est_p 的维度一致
     true_p = [trajectories.(v_name).X_true(1:N_steps), ...
               trajectories.(v_name).Y_true(1:N_steps), ...
               trajectories.(v_name).Z_true(1:N_steps)];
@@ -159,13 +168,13 @@ print_results(Vehicle_num, rmse_p, rmse_v, rmse_att, mean_rmse_p, mean_rmse_v, m
 
 %% ==== 局部打印辅助函数 ====
 function print_results(Vehicle_num, rmse_p, rmse_v, rmse_att, m_p, m_v, m_att)
-    fprintf('\n================== CMLKF RMSE 结果 ==================\n');
+    fprintf('\n================== CIEKF RMSE 结果 ==================\n'); % [修改抬头]
     fprintf(' VehID  |  Pos(m)  |  Vel(m/s)  |  Att(deg)\n');
-    fprintf('-----------------------------------------------------\n');
+    fprintf('----------------------------------------------------\n');
     for i = 1:Vehicle_num
         fprintf('  %2d    |  %6.4f  |   %6.4f   |  %6.4f\n', i, rmse_p(i), rmse_v(i), rmse_att(i));
     end
-    fprintf('-----------------------------------------------------\n');
+    fprintf('----------------------------------------------------\n');
     fprintf('  Avg   |  %6.4f  |   %6.4f   |  %6.4f\n', m_p, m_v, m_att);
-    fprintf('=====================================================\n\n');
+    fprintf('====================================================\n\n');
 end

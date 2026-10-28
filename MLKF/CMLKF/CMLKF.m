@@ -57,10 +57,10 @@ classdef CMLKF < handle
                 if isfield(Noise, 'UWB_sigma_anc'), obj.UWB_sigma_anc = Noise.UWB_sigma_anc; end
                 if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
             end
-            obj.epsilon = 1e-4;
-            obj.max_iter = 40;
+            obj.epsilon = 1e-8;
+            obj.max_iter = 80;
             obj.max_step = Inf; 
-            obj.beta_inv = 30;   
+            obj.beta_inv = 100;   
 
             % 2. 初始化状态
             obj.p = p0;
