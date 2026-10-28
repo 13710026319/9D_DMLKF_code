@@ -17,9 +17,7 @@ data_ratio = 1;
 % 路径配置 [修改为 CIEKF 的路径]
 data_dir = 'E:\DMLKF_code\Data';
 res_dir  = 'E:\DMLKF_code\IEKF\CIEKF\RESULT'; % 指向 CIEKF 的结果目录
-if ~exist(res_dir, 'dir')
-    mkdir(res_dir);
-end
+
 data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
 res_file  = fullfile(res_dir, sprintf('CIEKF_Veh%d_Anc%d.mat', Vehicle_num, Anchor_num));
 

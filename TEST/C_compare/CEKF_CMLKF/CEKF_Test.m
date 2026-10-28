@@ -17,9 +17,7 @@ data_ratio = 1;
 % 路径配置
 data_dir = 'E:\DMLKF_code\TEST\CEKF_CMLKF\data';
 res_dir  = 'E:\DMLKF_code\EKF\CEKF\RESULT'; % 指向 CEKF 的结果目录
-if ~exist(res_dir, 'dir')
-    mkdir(res_dir);
-end
+
 data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
 res_file  = fullfile(res_dir, sprintf('CEKF_Veh%d_Anc%d.mat', Vehicle_num, Anchor_num));
 
