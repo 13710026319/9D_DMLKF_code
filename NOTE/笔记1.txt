@@ -37,6 +37,10 @@
 6、建议在各个测试脚本内传入噪声数值比较好，保证集中式、分布式之间的公平对比。集中式下参考”obj.IMU_Sigma_a = (0.25)^2 * eye(3);  obj.IMU_Sigma_w = (0.025)^2 * eye(3);   obj.UWB_sigma_anc = 0.18;  obj.UWB_sigma_rel = 0.18; “；分布式下参考“kf.IMU_Sigma_a = (0.07)^2 * eye(3); kf.IMU_Sigma_w = (0.007)^2 * eye(3); kf.UWB_sigma_anc = 0.1; kf.UWB_sigma_rel = 0.1;”。此外max_iter，epsilon, beta_inv也要关注一下 ( max_step这个一般可以设为inf)
 
 
+2026.10.28
+1、解决了CMLKF与CEKF的比较问题，在TEST/C_compare/CEKF_CMLKF中放了一个数据集生成脚本，专门用于生成对比数据集，重点就是要给初始位置加入偏差（模拟未初始校准的坏先验）、非线性要强（UWB精度要高、基站车辆之间接近共面且距离不要太远）。目前用了三个指标：总RMSE，2-30S RMSE， 最终RMSE，目前三者都实现CMLKF优于CEKF，且在先验较差的情况下CMLKF可以在第二次UWB更新时就快速收敛，即CMLKF的2-30S RMSE 显著优于CEKF，这体现了MLE优化的优势。
+2、目前对比CEKF,CMLKF,CIEKF时后两者都在三个指标上优于CEKF，但是后两者的表现差距不大，可能本质在UWB精度较高时MLE趋于MAP优化了？但MAP优化本身比MLE复杂，所以这是好事，而且本质上也没有MLE能优于MAP的理由，毕竟后者计算量更大了。
+
 
 
 
