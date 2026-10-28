@@ -15,7 +15,7 @@ bias_comp_ratio = 0.7;
 data_ratio = 1;
 
 % 路径配置
-data_dir = 'E:\DMLKF_code\Data';
+data_dir = 'E:\DMLKF_code\TEST\CEKF_CMLKF\data';
 res_dir  = 'E:\DMLKF_code\EKF\CEKF\RESULT'; % 指向 CEKF 的结果目录
 if ~exist(res_dir, 'dir')
     mkdir(res_dir);
