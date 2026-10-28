@@ -2,6 +2,7 @@ classdef CMLKF < handle
     % CMLKF - 集中式最大似然卡尔曼滤波器 (Centralized Maximum Likelihood Kalman Filter)
     % 状态维度：9D x I（纯SO3姿态3、位置3、速度3，无偏置估计）
     % 修复：严格遵循 MLKF 理论，is_GN 仅控制搜寻最优点的算法，最终似然信息提取严格使用精确海森矩阵
+    % 非必要不使用GN，直接使用Newton，即is_GN=0
     
     properties
         Vehicle_num       % 无人机数量 (I)
