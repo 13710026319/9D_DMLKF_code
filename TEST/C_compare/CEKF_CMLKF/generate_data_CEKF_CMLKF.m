@@ -21,15 +21,17 @@ N_steps = round(t_end / dt_imu) + 1;
 repeat_time = 5;             % 生成的独立批次数量
 N_steps_total = N_steps * repeat_time;
 
+% --- 文件标识与随机种子配置 (核心修改点) ---
+dataset_id = 'CEKF_CMLKF_CIEKF_30_1';          % 文件名后缀 ID，用于标识数据集
+
 % --- 实体数量配置 ---
-Vehicle_num = 6;             % 车辆/无人机数量 [4, 12]
-Anchor_num  = 10;            % UWB基站数量 [4, 20]
-if Vehicle_num < 4 || Vehicle_num > 12, error('Vehicle_num 必须在 [4, 12] 范围内。'); end
-if Anchor_num < 4 || Anchor_num > 20,   error('Anchor_num 必须在 [4, 20] 范围内。'); end
+Vehicle_num = 4;             % 车辆/无人机数量 [4, 12]
+Anchor_num  = 12;            % UWB基站数量 [4, 20]
+% if Vehicle_num < 4 || Vehicle_num > 12, error('Vehicle_num 必须在 [4, 12] 范围内。'); end
+% if Anchor_num < 4 || Anchor_num > 20,   error('Anchor_num 必须在 [4, 20] 范围内。'); end
 if repeat_time < 1 || round(repeat_time) ~= repeat_time, error('repeat_time 必须是正整数。'); end
 
-% --- 文件标识与随机种子配置 (核心修改点) ---
-dataset_id = 'CEKF_CMLKF_CIEKF_31';          % 文件名后缀 ID，用于标识数据集
+
 % 使用基于时间的随机种子，确保每次运行哪怕 dataset_id 相同，生成的数据也完全不同
 rng('shuffle');              
 rng_state = rng;

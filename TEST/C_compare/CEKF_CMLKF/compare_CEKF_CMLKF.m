@@ -8,7 +8,7 @@ Anchor_num  = 10;
 dataset_id  = 'CEKF_CMLKF_30';      % 可以是任意字符串，例如 '002' 或 'CEKF_CMLKF_002'
 
 run_flag    = 1;          % 0：结果存在时直接读取；1：重新运行
-save_flag   = 1;          % 1：保存各批次、各时刻的位置 RMSE (CSV)
+save_flag   = 0;          % 1：保存各批次、各时刻的位置 RMSE (CSV)
 figure_save = 0;          % 0：不保存图片；1：保存平均 RMSE 曲线图 (PNG)
 
 bias_comp_ratio = 1.0;    % 1.0 表示完全补偿 IMU 零偏
