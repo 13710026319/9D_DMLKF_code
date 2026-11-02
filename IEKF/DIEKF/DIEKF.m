@@ -15,7 +15,7 @@ classdef DIEKF < handle
         UWB_sigma_rel
         
         max_iter          % 外层 ADMM 最大通信迭代次数 (K)
-        M_in = 1          % 内层局部 GN 迭代次数 (M_in)
+        M_in = 30          % 内层局部 GN 迭代次数 (M_in)
         rho  = 50         % ADMM 二次惩罚参数 (\rho)
         epsilon           % 收敛阈值
         max_step          % 最大步长限制 (默认 inf)
