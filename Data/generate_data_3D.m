@@ -32,8 +32,8 @@ IMU_noise_params.sigma_nw = 0.005;
 IMU_noise_params.sigma_ba = 0.005;     
 IMU_noise_params.sigma_bw = 0.0005;    
 
-UWB_noise_params.sigma_anc = 0.01;  
-UWB_noise_params.sigma_rel = 0.01;   
+UWB_noise_params.sigma_anc = 0.1;  
+UWB_noise_params.sigma_rel = 0.1;   
 
 %% 2. 环境与真值轨迹生成 (调用外部 env_setup.m)
 [trajectories, anchors] = env_setup(Vehicle_num, Anchor_num, N_steps, dt_imu, t_end);

@@ -14,8 +14,8 @@ classdef DIEKF < handle
         UWB_sigma_anc
         UWB_sigma_rel
         
-        max_iter          % 外层 ADMM 最大通信迭代次数 (K)
-        M_in = 30          % 内层局部 GN 迭代次数 (M_in)
+        ADMM_iter          % 外层 ADMM 最大通信迭代次数 (K)
+        GN_iter = 50          % 内层局部 GN 迭代次数 (M_in)
         rho  = 50         % ADMM 二次惩罚参数 (\rho)
         epsilon           % 收敛阈值
         max_step          % 最大步长限制 (默认 inf)
@@ -44,7 +44,7 @@ classdef DIEKF < handle
     methods
         function obj = DIEKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, max_iter, varargin)
             if nargin < 9 || isempty(max_iter)
-                max_iter = 200;
+                max_iter = 400;
             end
             
             % 兼容 10 参数 (..., max_iter, Noise) 或 11 参数 (..., max_iter, L_hop, Noise) 调用
@@ -78,10 +78,10 @@ classdef DIEKF < handle
                 if isfield(Noise, 'UWB_sigma_anc'), obj.UWB_sigma_anc = Noise.UWB_sigma_anc; end
                 if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
                 if isfield(Noise, 'rho'),           obj.rho           = Noise.rho;           end
-                if isfield(Noise, 'M_in'),          obj.M_in          = Noise.M_in;          end
+                if isfield(Noise, 'M_in'),          obj.GN_iter          = Noise.M_in;          end
             end
 
-            obj.max_iter = max_iter;   
+            obj.ADMM_iter = max_iter;   
             obj.epsilon  = 1e-4; 
             obj.max_step = inf;  
 
@@ -261,7 +261,7 @@ classdef DIEKF < handle
             % ========================================================
             % --- [3] 内层局部 GN-IEKF 与外层 Consensus ADMM 迭代 ---
             % ========================================================
-            for iter = 1:obj.max_iter
+            for iter = 1:obj.ADMM_iter
                 Theta_next = Theta;
                 Z_next     = Z;
                 Lam_next   = Lam;
@@ -287,7 +287,7 @@ classdef DIEKF < handle
                     end
                     
                     % 内层 Gauss-Newton 循环 m = 1, ..., M_in
-                    for m = 1:obj.M_in
+                    for m = 1:obj.GN_iter
                         s_m = Pi_mat * theta_m; % 3D 位置误差向量 (式 21)
                         
                         % 计算 3D UWB GN 梯度与 GN 海森矩阵 (式 26-34)
@@ -376,8 +376,8 @@ classdef DIEKF < handle
                 obj.last_clip = n_clip;
                 obj.clip_hist(end+1, 1) = n_clip;
             end
-            if iter == obj.max_iter && err >= obj.epsilon && obj.print_flag
-                fprintf('警告: DIEKF 节点未在%d次内收敛, 残差=%.6f\n', obj.max_iter, err);
+            if iter == obj.ADMM_iter && err >= obj.epsilon && obj.print_flag
+                fprintf('警告: DIEKF 节点未在%d次内收敛, 残差=%.6f\n', obj.ADMM_iter, err);
             end
             
             % ========================================================

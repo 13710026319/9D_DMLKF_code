@@ -5,7 +5,7 @@ clc; clear; close all;
 %% 1. 测试参数与运行配置
 Vehicle_num = 6;            
 Anchor_num  = 6;     
-neighbor_k  = 4; % 邻居数
+neighbor_k  = 2; % 邻居数
 run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
 save_flag   = 0;
 
@@ -117,8 +117,8 @@ kf = DMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask);
 
 kf.IMU_Sigma_a = (0.07)^2 * eye(3);
 kf.IMU_Sigma_w = (0.007)^2 * eye(3);
-kf.UWB_sigma_anc = 0.01;
-kf.UWB_sigma_rel = 0.01;
+kf.UWB_sigma_anc = 0.1;
+kf.UWB_sigma_rel = 0.1;
 
 if mod(neighbor_k, 2) == 0
     kf.beta_inv = 10;   
