@@ -3,9 +3,9 @@
 clc; clear; close all;
 
 %% 1. 测试参数与运行配置
-Vehicle_num = 6;            
-Anchor_num  = 6;     
-neighbor_k  = 2; % 邻居数
+Vehicle_num = 8;            
+Anchor_num  = 10;     
+neighbor_k  = 4; % 邻居数
 run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
 save_flag   = 0;
 
@@ -13,7 +13,7 @@ save_flag   = 0;
 bias_comp_ratio = 1; 
 
 % 控制截取数据集的比例 (例如 0.8 表示只跑前 80% 的数据，1.0为全部)
-data_ratio  = 0.2;
+data_ratio  = 0.3;
 
 % 路径配置
 data_dir = 'E:\DMLKF_code\Data';
@@ -118,12 +118,13 @@ kf = DIEKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask);
 
 kf.IMU_Sigma_a   = (0.07)^2 * eye(3);
 kf.IMU_Sigma_w   = (0.007)^2 * eye(3);
-kf.UWB_sigma_anc = 0.01;
-kf.UWB_sigma_rel = 0.01;
+kf.UWB_sigma_anc = 0.1;
+kf.UWB_sigma_rel = 0.1;
 
 % ADMM 惩罚参数与内层 GN 步数配置
 kf.rho  = 50;
-kf.M_in = 1;
+kf.ADMM_iter = 300;
+kf.GN_iter = 5;
 
 % 结果存储空间
 est_p = zeros(N_steps, 3, Vehicle_num);
@@ -145,7 +146,7 @@ for k = 2:N_steps
     gyro_m = zeros(3, Vehicle_num);
     for i = 1:Vehicle_num
         v_name = sprintf('V%d', i);
-        % 注入指定比例的残留零偏 (默认补偿 70%，留 30% 作为干扰先验)
+        
         acc_m(:, i)  = trajectories.(v_name).IMU_acc_m(k-1, :)' - bias_comp_ratio * trajectories.(v_name).IMU_bias_a_true(k-1, :)';
         gyro_m(:, i) = trajectories.(v_name).IMU_gyro_m(k-1, :)' - bias_comp_ratio * trajectories.(v_name).IMU_bias_w_true(k-1, :)';
     end

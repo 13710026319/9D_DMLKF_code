@@ -3,9 +3,9 @@
 clc; clear; close all;
 
 %% 1. 测试参数与运行配置
-Vehicle_num = 6;            
-Anchor_num  = 6;     
-neighbor_k  = 2; % 邻居数
+Vehicle_num = 8;            
+Anchor_num  = 10;     
+neighbor_k  = 4; % 邻居数
 run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
 save_flag   = 0;
 
@@ -13,7 +13,7 @@ save_flag   = 0;
 bias_comp_ratio =1; 
 
 % 控制截取数据集的比例 (例如 0.8 表示只跑前 80% 的数据，1.0为全部)
-data_ratio  = 0.2;
+data_ratio  = 0.4;
 
 % 路径配置
 data_dir = 'E:\DMLKF_code\Data';
@@ -121,12 +121,12 @@ kf.UWB_sigma_anc = 0.1;
 kf.UWB_sigma_rel = 0.1;
 
 if mod(neighbor_k, 2) == 0
-    kf.beta_inv = 10;   
+    kf.beta_inv = 100;   
 else
     kf.beta_inv = 1;
 end
 
-
+kf.max_iter = 50;
 
 % 结果存储空间
 est_p = zeros(N_steps, 3, Vehicle_num);
