@@ -18,8 +18,8 @@ N_steps = round(t_end / dt_imu) + 1;
 
 % ==================================================
 % 测试建议：车辆=8, 基站=10
-Vehicle_num = 8;            
-Anchor_num = 10;             
+Vehicle_num = 6;            
+Anchor_num = 6;             
 % ==================================================
 
 % 保存路径 (请根据你的电脑路径自行确认)
@@ -35,8 +35,8 @@ IMU_noise_params.sigma_nw = 0.005;
 IMU_noise_params.sigma_ba = 0.005;     
 IMU_noise_params.sigma_bw = 0.0005;    
 
-UWB_noise_params.sigma_anc = 0.5;   % <-- 放大到 0.5m
-UWB_noise_params.sigma_rel = 0.5;   % <-- 放大到 0.5m
+UWB_noise_params.sigma_anc = 0.1;   % <-- 放大到 0.5m
+UWB_noise_params.sigma_rel = 0.1;   % <-- 放大到 0.5m
 
 %% 2. 环境与真值轨迹生成 (调用外部 env_setup.m)
 [trajectories, anchors] = env_setup(Vehicle_num, Anchor_num, N_steps, dt_imu, t_end);
