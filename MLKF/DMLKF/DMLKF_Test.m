@@ -4,7 +4,7 @@ clc; clear; close all;
 
 %% 1. 测试参数与运行配置
 Vehicle_num = 8;            
-Anchor_num  = 10;     
+Anchor_num  = 4;     
 neighbor_k  = 4; % 邻居数
 run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
 save_flag   = 0;
@@ -13,7 +13,7 @@ save_flag   = 0;
 bias_comp_ratio =1; 
 
 % 控制截取数据集的比例 (例如 0.8 表示只跑前 80% 的数据，1.0为全部)
-data_ratio  = 0.4;
+data_ratio  = 0.2;
 
 % 路径配置
 data_dir = 'E:\DMLKF_code\Data';
@@ -22,7 +22,7 @@ if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
 
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_1.mat', Vehicle_num, Anchor_num));
 res_file  = fullfile(res_dir, sprintf('DMLKF_Veh%d_Anc%d_20.mat', Vehicle_num, Anchor_num));
 
 %% 2. 检查结果文件是否存在 (run_flag 机制)
