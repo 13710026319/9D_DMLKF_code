@@ -3,25 +3,30 @@
 clc; clear; close all;
 
 %% ==================== 1. 测试参数配置 ====================
-Vehicle_num     = 6;
-Anchor_num      = 10;
-Anchor_data_num = 4:10  % 测试使用的基站数量，可以是标量(如10)或向量(如4:10)
-dataset_id      = 'CEKF_CMLKF_CIEKF_30'; 
+Vehicle_num     = 4;
+Anchor_num      = 12;
+Anchor_data_num = 4:12  % 测试使用的基站数量，可以是标量(如10)或向量(如4:10)
+dataset_id      = 'CEKF_CMLKF_CIEKF_45_10'; 
 
 run_flag        = 1;     % 0：结果存在时直接读取；1：重新运行
-save_flag       = 1;     % 1：保存各基站数下批次平均的位置 RMSE (CSV)
+save_flag       = 0;     % 1：保存各基站数下批次平均的位置 RMSE (CSV)
 
 % --- 算法端与滤波器相关参数 ---
-bias_comp_ratio    = 1.0; % 1.0 表示完全补偿 IMU 零偏
+bias_comp_ratio    = 1; % 1.0 表示完全补偿 IMU 零偏
 data_ratio         = 1.0; % 每个批次使用的数据比例
 velocity_prior_std = 0.1; % 初始速度先验标准差 (m/s)
 attitude_std_deg   = 1.0; % 初始姿态角先验标准差 (度)
 
 % --- CMLKF 与 CIEKF 迭代参数 ---
-cml_max_iter = 60;        % 最大迭代次数 (CMLKF与CIEKF共用)
-cml_epsilon  = 1e-8;      % 迭代收敛阈值 (CMLKF与CIEKF共用)
-cml_beta_inv = 100;       % CMLKF 专属
+cml_max_iter = 60;        % 最大迭代次数 (CMLKF)
+ekf_max_iter = 60;        % 最大迭代次数 (IEKF)
+cml_epsilon  = 1e-6;      % 迭代收敛阈值 (CMLKF与CIEKF共用)
+cml_beta_inv = 100;       % CMLKF 专属 越小则优化过程牛顿步走的越慢但是稳定 需要更多迭代
 cml_max_step = 1;       % CMLKF 专属
+
+% 如果要让MLKF用少的迭代数跑则用下面的参数 但有时可能不稳定
+% cml_beta_inv = 10;       % CMLKF 专属
+% cml_max_step = inf;       % CMLKF 专属
 
 % 参数校验
 if max(Anchor_data_num) > Anchor_num
@@ -133,7 +138,7 @@ for anc_idx = 1:length(Anchor_data_num)
             N_steps_use, S.IMU_noise_params, S.UWB_noise_params, ...
             bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
             attitude_std_deg, initial_position_error, ...
-            cml_max_iter, cml_epsilon, cml_beta_inv, cml_max_step);
+            ekf_max_iter, cml_epsilon, cml_beta_inv, cml_max_step);
     
         % 计算指标并记录
         local_time = trajectories.V1.Time_true(1:N_steps_use);

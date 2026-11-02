@@ -10,7 +10,7 @@ run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新
 save_flag   = 0;
 
 % 0.7为保留未知零偏以破坏先验 (1.0为完全补偿，0.7为补偿70%保留30%漂移)
-bias_comp_ratio = 0.7; 
+bias_comp_ratio = 1; 
 
 % 控制截取数据集的比例 (例如 0.8 表示只跑前 80% 的数据，1.0为全部)
 data_ratio  = 0.2;
@@ -114,6 +114,11 @@ for i = 1:Vehicle_num
 end
 % 实例化 DEKF 基准算法
 kf = DEKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
+
+kf.IMU_Sigma_a = (0.07)^2 * eye(3);
+kf.IMU_Sigma_w = (0.007)^2 * eye(3);
+kf.UWB_sigma_anc = 0.1;
+kf.UWB_sigma_rel = 0.1;
 
 % 结果存储空间
 est_p = zeros(N_steps, 3, Vehicle_num);

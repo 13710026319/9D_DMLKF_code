@@ -10,7 +10,7 @@ run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新
 save_flag   = 0;
 
 % 0.7为保留 30% 未知零偏以破坏先验，凸显纯测距优化优势 (1.0为完全补偿)
-bias_comp_ratio = 0.7; 
+bias_comp_ratio =1; 
 
 % 控制截取数据集的比例 (例如 0.8 表示只跑前 80% 的数据，1.0为全部)
 data_ratio  = 0.2;
@@ -64,27 +64,6 @@ for i = 1:Vehicle_num
         Anchor_Mask(i, :) = 0;
     end
 end
-
-% B. 车间掩码 (支持奇数/偶数邻居数的静态环形拓扑)
-% K_degree = min(neighbor_k, Vehicle_num - 1); 
-% V2V_Mask = zeros(Vehicle_num, Vehicle_num);
-% 
-% K_fwd = ceil(K_degree / 2);  % 前面(序号变大方向)分大头
-% K_bwd = floor(K_degree / 2); % 后面(序号变小方向)分小头
-% 
-% for i = 1:Vehicle_num
-%     % 往后(序号变大方向)连 K_fwd 个
-%     for d = 1:K_fwd
-%         idx_forward = mod(i + d - 1, Vehicle_num) + 1;
-%         V2V_Mask(i, idx_forward) = 1;
-%     end
-%     % 往前(序号变小方向)连 K_bwd 个
-%     for d = 1:K_bwd
-%         idx_backward = mod(i - d - 1, Vehicle_num) + 1;
-%         V2V_Mask(i, idx_backward) = 1;
-%     end
-% end
-% V2V_Mask(logical(eye(Vehicle_num))) = 0; % 自身对自身设0
 
 K_degree = min(neighbor_k, Vehicle_num - 1); 
 
@@ -142,10 +121,12 @@ kf.UWB_sigma_anc = 0.1;
 kf.UWB_sigma_rel = 0.1;
 
 if mod(neighbor_k, 2) == 0
-    kf.beta_inv = 10;   
+    kf.beta_inv = 100;   
 else
     kf.beta_inv = 1;
 end
+
+kf.max_iter = 50;
 
 % 结果存储空间
 est_p = zeros(N_steps, 3, Vehicle_num);

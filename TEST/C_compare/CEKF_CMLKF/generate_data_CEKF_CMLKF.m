@@ -16,13 +16,13 @@ if mod(dt_uwb, dt_imu) ~= 0
 end
 
 % --- 仿真时间与批次配置 ---
-t_end = 30;                  % 每个批次的仿真时长 (s)
+t_end = 45;                  % 每个批次的仿真时长 (s)
 N_steps = round(t_end / dt_imu) + 1;
-repeat_time = 5;             % 生成的独立批次数量
+repeat_time = 10;             % 生成的独立批次数量
 N_steps_total = N_steps * repeat_time;
 
 % --- 文件标识与随机种子配置 (核心修改点) ---
-dataset_id = 'CEKF_CMLKF_CIEKF_30_1';          % 文件名后缀 ID，用于标识数据集
+dataset_id = 'CEKF_CMLKF_CIEKF_45_10';          % 文件名后缀 ID，用于标识数据集
 
 % --- 实体数量配置 ---
 Vehicle_num = 4;             % 车辆/无人机数量 [4, 12]

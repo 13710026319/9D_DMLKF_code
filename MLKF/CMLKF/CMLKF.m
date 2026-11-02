@@ -264,6 +264,7 @@ classdef CMLKF < handle
             % 为了确保融入协方差系统不崩溃，依据论文 B(H) 映射操作，进行严格的微小正定截断
             [V_eig, D_eig] = eig(Omega_Exact);
             eig_vals = diag(D_eig);
+            % eig_vals(eig_vals < 1e-6) = 1e-6; % 截断负特征值，保证绝对半正定
             eig_vals(eig_vals < 1e-6) = 1e-6; % 截断负特征值，保证绝对半正定
             Xi_inv = V_eig * diag(eig_vals) * V_eig';
             
