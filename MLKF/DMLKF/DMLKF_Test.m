@@ -22,7 +22,7 @@ if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
 
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_1.mat', Vehicle_num, Anchor_num));
+data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
 res_file  = fullfile(res_dir, sprintf('DMLKF_Veh%d_Anc%d_20.mat', Vehicle_num, Anchor_num));
 
 %% 2. 检查结果文件是否存在 (run_flag 机制)
