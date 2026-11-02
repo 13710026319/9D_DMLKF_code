@@ -3,14 +3,14 @@
 clc; clear; close all;
 
 %% 1. 测试参数与运行配置
-Vehicle_num = 8;            
-Anchor_num  = 4;     
-neighbor_k  = 4; % 邻居数
+Vehicle_num = 6;            
+Anchor_num  = 6;     
+neighbor_k  = 3; % 邻居数
 run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
 save_flag   = 0;
 
 % 0.7为保留 30% 未知零偏以破坏先验，凸显纯测距优化优势 (1.0为完全补偿)
-bias_comp_ratio = 0.7; 
+bias_comp_ratio =1; 
 
 % 控制截取数据集的比例 (例如 0.8 表示只跑前 80% 的数据，1.0为全部)
 data_ratio  = 0.2;
@@ -65,27 +65,6 @@ for i = 1:Vehicle_num
     end
 end
 
-% B. 车间掩码 (支持奇数/偶数邻居数的静态环形拓扑)
-% K_degree = min(neighbor_k, Vehicle_num - 1); 
-% V2V_Mask = zeros(Vehicle_num, Vehicle_num);
-% 
-% K_fwd = ceil(K_degree / 2);  % 前面(序号变大方向)分大头
-% K_bwd = floor(K_degree / 2); % 后面(序号变小方向)分小头
-% 
-% for i = 1:Vehicle_num
-%     % 往后(序号变大方向)连 K_fwd 个
-%     for d = 1:K_fwd
-%         idx_forward = mod(i + d - 1, Vehicle_num) + 1;
-%         V2V_Mask(i, idx_forward) = 1;
-%     end
-%     % 往前(序号变小方向)连 K_bwd 个
-%     for d = 1:K_bwd
-%         idx_backward = mod(i - d - 1, Vehicle_num) + 1;
-%         V2V_Mask(i, idx_backward) = 1;
-%     end
-% end
-% V2V_Mask(logical(eye(Vehicle_num))) = 0; % 自身对自身设0
-
 K_degree = min(neighbor_k, Vehicle_num - 1); 
 
 % 如果总节点数为奇数，且要求的度数也为奇数，则数学上无法构成正则对称图，直接报错终止
@@ -138,14 +117,16 @@ kf = DMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask);
 
 kf.IMU_Sigma_a = (0.07)^2 * eye(3);
 kf.IMU_Sigma_w = (0.007)^2 * eye(3);
-kf.UWB_sigma_anc = 0.1;
-kf.UWB_sigma_rel = 0.1;
+kf.UWB_sigma_anc = 0.01;
+kf.UWB_sigma_rel = 0.01;
 
 if mod(neighbor_k, 2) == 0
     kf.beta_inv = 10;   
 else
     kf.beta_inv = 1;
 end
+
+
 
 % 结果存储空间
 est_p = zeros(N_steps, 3, Vehicle_num);
