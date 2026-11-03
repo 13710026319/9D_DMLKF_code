@@ -52,6 +52,11 @@
 1、搞出来了IEKF-ADMM，表现不错
 2、DMLKF全系列换成分布式牛顿后似乎那些beta等参数又得调整了，目前DMLKF,V1等都得重新测试，而且iter_compare_main.m当中的结果虽然iter增加可以说明DN收敛于CN，但是iter=1时本身差距不小了，而iter=2时突然发散，这可能后续也得研究一下
 
+2026.11.3
+1、昨晚发现DMLKF优于DEKF的情况其实依然可以实现，只是需要用之前2026年9月份左右的那一批Data\generate_data与env_setup搭配（主要是env_setup当中的蜂窝型轨迹+Z轴1-2m变动的基站布局），之前被agent莫名其妙改了该配置然后提交git了，所以昨晚生成数据集测试才发现DMLKF又不行了，现在已经找回来了，DMLKF优于DEKF。
+2、对于昨晚iter_compare_main.m所说的情况，其实iter=1时候本质上DMLKF就是DEKF（信息滤波），而之前集中式下MLKF要优于EKF，则需要一定的先验初始扰动，这个可以后续试一下看看。
+
+
 
 
 

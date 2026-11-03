@@ -23,7 +23,7 @@ classdef DMLKF < handle
         ALPHA_SAFETY = 1  
         alpha_const         
 
-        diag_flag = 1       
+        diag_flag = 0       
         last_iter = 0
         last_err  = NaN
         iter_hist = []      

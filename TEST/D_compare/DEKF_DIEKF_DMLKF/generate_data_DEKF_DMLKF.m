@@ -20,14 +20,14 @@ end
 
 Vehicle_num = 8;
 Anchor_num  = 4;
-t_end       = 100;
+t_end       = 20;
 N_steps     = round(t_end / dt_imu) + 1;
-repeat_time = 1;
+repeat_time = 6;
 N_steps_total = N_steps * repeat_time;
 
 % The same dataset_id intentionally overwrites the same MAT file.
 % Randomization is based on rng('shuffle'), never on this identifier.
-dataset_id = 'DEKF_DIEKF_DMLKF_100_1';
+dataset_id = 'DEKF_DIEKF_DMLKF_20_6';
 
 if repeat_time < 1 || round(repeat_time) ~= repeat_time
     error('repeat_time must be a positive integer.');
