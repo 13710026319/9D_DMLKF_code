@@ -9,8 +9,23 @@ dataset_name    = 'Trj_Veh8_Anc4_pure.mat';
 bias_comp_ratio = 1;
 data_ratio      = 0.2;
 
+initial_position_std_xy  = 2;
+initial_position_std_z   = 1.5;
+initial_velocity_std     = 0.1;
+initial_attitude_std_deg = 1;
+
 run_flag  = 1;
 save_flag = 1;
+
+test_dir    = fileparts(mfilename('fullpath'));
+case_dir    = fileparts(test_dir);
+data_dir    = fullfile(case_dir, 'Data');
+data_file   = fullfile(data_dir, dataset_name);
+result_dir  = fullfile(case_dir, 'Result');
+result_file = fullfile(result_dir, ...
+    sprintf('iter_%dV_%dA_.csv', Vehicle_num, Anchor_num));
+plot_file   = fullfile(result_dir, ...
+    sprintf('iter_%dV_%dA_.png', Vehicle_num, Anchor_num));
 
 V1_max_iter = 30;
 DMLKF_iter_groups = {
@@ -30,20 +45,11 @@ DMLKF_epsilon      = 1e-4;
 
 max_wait_hours = 6;
 
-%% Paths and result signature
-test_dir     = fileparts(mfilename('fullpath'));
-old_test_dir = fileparts(test_dir);
-project_root = fileparts(fileparts(old_test_dir));
-data_file    = fullfile(old_test_dir, 'Data', dataset_name);
-result_dir   = fullfile(old_test_dir, 'Result');
+initial_position_std_vec = [initial_position_std_xy; ...
+    initial_position_std_xy; initial_position_std_z];
 
 [all_dmlkf_iters, active_groups] = prepare_iterations( ...
     DMLKF_iter_groups, V1_max_iter);
-
-result_tag = make_result_tag(dataset_name, Vehicle_num, Anchor_num, ...
-    neighbor_k, data_ratio, bias_comp_ratio, V1_max_iter, all_dmlkf_iters);
-result_file = fullfile(result_dir, [result_tag '.csv']);
-plot_file   = fullfile(result_dir, [result_tag '.png']);
 
 if run_flag == 0
     if exist(result_file, 'file')
@@ -62,6 +68,8 @@ if ~isfile(data_file)
     error('找不到数据集: %s', data_file);
 end
 
+initial_position_error = initial_position_std_vec .* randn(3, Vehicle_num);
+
 cfg = struct();
 cfg.data_file          = data_file;
 cfg.Vehicle_num        = Vehicle_num;
@@ -69,6 +77,10 @@ cfg.Anchor_num         = Anchor_num;
 cfg.neighbor_k         = neighbor_k;
 cfg.bias_comp_ratio    = bias_comp_ratio;
 cfg.data_ratio         = data_ratio;
+cfg.initial_position_error      = initial_position_error;
+cfg.initial_position_std_vec    = initial_position_std_vec;
+cfg.initial_velocity_std        = initial_velocity_std;
+cfg.initial_attitude_std_deg    = initial_attitude_std_deg;
 cfg.V1_max_iter        = V1_max_iter;
 cfg.V1_beta_inv        = V1_beta_inv;
 cfg.V1_max_step        = V1_max_step;
@@ -179,22 +191,6 @@ end
 
 function tf = is_positive_integer(v)
 tf = isnumeric(v) && isscalar(v) && isfinite(v) && v > 0 && v == round(v);
-end
-
-function tag = make_result_tag(dataset_name, V_num, A_num, K, ...
-        data_ratio, bias_ratio, v1_iter, dml_iters)
-[~, stem] = fileparts(dataset_name);
-stem = regexprep(stem, '[^0-9A-Za-z_-]', '_');
-ratio_txt = number_tag(data_ratio);
-bias_txt  = number_tag(bias_ratio);
-iter_txt  = strjoin(string(dml_iters), '-');
-tag = sprintf('Newton_iter_%s_V%d_A%d_K%d_r%s_b%s_V1-%d_DML-%s', ...
-    stem, V_num, A_num, K, ratio_txt, bias_txt, v1_iter, iter_txt);
-end
-
-function s = number_tag(v)
-s = strrep(sprintf('%.6g', v), '.', 'p');
-s = strrep(s, '-', 'm');
 end
 
 function s = quote_text(v)

@@ -13,7 +13,7 @@ fprintf(fid, 'algorithm,max_iter,pos_rmse_m,seconds,ok,note\n');
 
 try
     D = load_case(cfg.data_file, cfg.Vehicle_num, cfg.Anchor_num, ...
-        cfg.data_ratio, cfg.bias_comp_ratio);
+        cfg.data_ratio, cfg.bias_comp_ratio, cfg.initial_position_error);
     V2V_Mask = sym_k_mask(D.V, cfg.neighbor_k);
 
     mode = upper(char(mode));
@@ -46,11 +46,15 @@ if done_fid >= 0
 end
 end
 
-function D = load_case(data_file, V_expected, A_expected, data_ratio, bias_ratio)
+function D = load_case(data_file, V_expected, A_expected, data_ratio, ...
+        bias_ratio, initial_position_error)
 S = load(data_file, 'trajectories', 'anchors', ...
     'Vehicle_num', 'Anchor_num');
 if S.Vehicle_num ~= V_expected || S.Anchor_num ~= A_expected
     error('数据集车辆数或基站数与配置不一致。');
+end
+if ~isequal(size(initial_position_error), [3, V_expected])
+    error('初始位置扰动矩阵尺寸必须为 3 x Vehicle_num。');
 end
 
 D = struct();
@@ -72,7 +76,8 @@ D.true_p = zeros(D.N_steps, 3, D.V);
 for i = 1:D.V
     name = sprintf('V%d', i);
     p0(3*i-2 : 3*i) = [D.traj.(name).X_true(1); ...
-        D.traj.(name).Y_true(1); D.traj.(name).Z_true(1)];
+        D.traj.(name).Y_true(1); D.traj.(name).Z_true(1)] + ...
+        initial_position_error(:, i);
     v0(3*i-2 : 3*i) = [D.traj.(name).Vx_true(1); ...
         D.traj.(name).Vy_true(1); D.traj.(name).Vz_true(1)];
     R0(:, :, i) = D.traj.(name).R_true(:, :, 1);
@@ -107,6 +112,7 @@ switch mode
         kf.epsilon = cfg.DMLKF_epsilon;
         kf.print_flag = 0;
 end
+set_initial_covariance(kf, mode, cfg);
 
 est_p = zeros(D.N_steps, 3, D.V);
 for i = 1:D.V
@@ -154,6 +160,26 @@ for i = 1:D.V
     rmse_each(i) = sqrt(mean(sum(error_vector.^2, 2)));
 end
 rmse_p = mean(rmse_each);
+end
+
+function set_initial_covariance(kf, mode, cfg)
+prior_block = blkdiag(diag(cfg.initial_position_std_vec.^2), ...
+    cfg.initial_velocity_std^2 * eye(3), ...
+    deg2rad(cfg.initial_attitude_std_deg)^2 * eye(3));
+
+switch mode
+    case 'V1'
+        full_prior = kron(eye(kf.Vehicle_num), prior_block);
+        for i = 1:kf.Vehicle_num
+            kf.Nodes{i}.Sigma_full = full_prior;
+        end
+    case 'DMLKF'
+        for i = 1:kf.Vehicle_num
+            local_len = numel(kf.U_list{i});
+            local_blocks = repmat({prior_block}, 1, local_len);
+            kf.Nodes{i}.SigmaJ = blkdiag(local_blocks{:});
+        end
+end
 end
 
 function M = sym_k_mask(V, K)
