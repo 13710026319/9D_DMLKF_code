@@ -16,13 +16,15 @@ bias_comp_ratio =1;
 data_ratio  = 0.2;
 
 % 路径配置
-data_dir = 'E:\DMLKF_code\Data';
+% data_dir = 'E:\DMLKF_code\Data';
+data_dir = 'E:\DMLKF_code\TEST\D_compare\DEKF_DIEKF_DMLKF\data';
 res_dir  = 'E:\DMLKF_code\MLKF\DMLKF\RESULT';
 if ~exist(res_dir, 'dir')
     mkdir(res_dir);
 end
 
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
+% data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
+data_file = fullfile(data_dir, 'Trj_Veh8_Anc4_DEKF_DIEKF_DMLKF_100_A.mat');
 res_file  = fullfile(res_dir, sprintf('DMLKF_Veh%d_Anc%d_20.mat', Vehicle_num, Anchor_num));
 
 %% 2. 检查结果文件是否存在 (run_flag 机制)
