@@ -29,9 +29,9 @@ plot_file   = fullfile(result_dir, ...
 
 V1_max_iter = 30;
 DMLKF_iter_groups = {
-    [1 2 3], ...
-    [5 7 10], ...
-    [15 20 25], ...
+    [1 3 5 7], ...
+    [10 15], ...
+    [20 25], ...
     [30 35], ...
     [50]
 };
@@ -90,12 +90,13 @@ cfg.DMLKF_ALPHA_SAFETY = DMLKF_ALPHA_SAFETY;
 cfg.DMLKF_epsilon      = DMLKF_epsilon;
 
 %% Parallel jobs
-tmp_dir = fullfile(test_dir, ...
-    ['newton_iter_tmp_' char(datetime('now', 'Format', 'yyyyMMdd_HHmmssSSS'))]);
-mkdir(tmp_dir);
-
-cfg_file = fullfile(tmp_dir, 'config.mat');
-save(cfg_file, 'cfg');
+% 临时文件生成（需要运行并行任务时取消以下注释）
+% tmp_dir = fullfile(test_dir, ...
+%     ['newton_iter_tmp_' char(datetime('now', 'Format', 'yyyyMMdd_HHmmssSSS'))]);
+% mkdir(tmp_dir);
+%
+% cfg_file = fullfile(tmp_dir, 'config.mat');
+% save(cfg_file, 'cfg');
 
 jobs = struct('mode', {}, 'iters', {}, 'tag', {});
 jobs(end+1) = struct('mode', 'V1', 'iters', V1_max_iter, 'tag', 'V1');
@@ -139,11 +140,9 @@ try
     T = collect_results(jobs, all_dmlkf_iters, V1_max_iter);
 catch err
     stop_workers(tmp_dir);
-    cleanup_temp(tmp_dir, data_file);
     rethrow(err);
 end
 
-cleanup_temp(tmp_dir, data_file);
 print_results(T);
 
 if save_flag
@@ -313,13 +312,6 @@ legend('Location', 'southeast');
 if do_save
     exportgraphics(fig, plot_file, 'Resolution', 150);
     fprintf('图片已保存: %s\n', plot_file);
-end
-end
-
-function cleanup_temp(tmp_dir, data_file)
-if ~strcmpi(fileparts(tmp_dir), fileparts(data_file)) && ...
-        contains(tmp_dir, 'newton_iter_tmp_') && exist(tmp_dir, 'dir')
-    rmdir(tmp_dir, 's');
 end
 end
 
