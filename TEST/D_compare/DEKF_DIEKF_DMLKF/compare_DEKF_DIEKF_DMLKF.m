@@ -1,6 +1,6 @@
 % =========================================================================
 % 脚本名称: compare_DEKF_DIEKF_DMLKF.m
-% 功能描述: 三算法同台对比测试脚本：DEKF vs. DIEKF (IEKF-ADMM) vs. DMLKF
+% 功能描述: 四算法同台对比测试脚本：DEKF vs. DIEKF vs. DIEKF_ADMM vs. DMLKF
 %           (仅计算、打印并保存各车辆在多批次上的平均位置 RMSE 表)
 % =========================================================================
 clc; clear; close all;
@@ -15,21 +15,23 @@ neighbor_k  = 4;                        % 环形拓扑中的车间通信邻居�
 % 1.2 数据与误差配置
 % 0.7 为保留 30% 未知零偏以破坏先验 (1.0 为完全补偿)
 bias_comp_ratio = 1;                    % IMU 零偏补偿比例
-data_ratio      = 0.2;                  % 每个批次的数据截取比例
+data_ratio      = 1;                  % 每个批次的数据截取比例
 
 % 1.3 数据集与运行控制标志
-dataset_id = 'DEKF_DIEKF_DMLKF_100_A';  % 数据集标识
-save_flag  = 1;                      % 是否保存实验结果至 CSV
+dataset_id = 'DEKF_DIEKF_DMLKF_15_8';  % 数据集标识
+save_flag  = 0;                         % 是否保存实验结果至 CSV
 run_flag   = 0;                         % 1: 运行实验; 0: 仅读取并打印已有结果
 
 % 1.4 算法超参数与迭代配置
-DMLKF_max_iter   = 50;                  % DMLKF 最大迭代次数
-DMLKF_beta_inv   = 50;                  % DMLKF 正则化步长参数
-DMLKF_print_flag = 0;                   % DMLKF 调试信息打印开关
+DIEKF_max_iter     = 2;                % DIEKF 本地高斯牛顿最大迭代次数
 
-DIEKF_ADMM_iter  = 230;                 % DIEKF 外层 ADMM 迭代次数
-DIEKF_GN_iter    = 10;                  % DIEKF 内层高斯牛顿迭代次数
-DIEKF_rho        = 50;                  % DIEKF 惩罚参数
+DMLKF_max_iter     = 10;                % DMLKF 最大迭代次数
+DMLKF_beta_inv     = 70;                % DMLKF 正则化步长参数
+DMLKF_print_flag   = 0;                 % DMLKF 调试信息打印开关
+
+DIEKF_ADMM_iter    = 10;               % DIEKF_ADMM 外层 ADMM 迭代次数
+DIEKF_ADMM_GN_iter = 3;                % DIEKF_ADMM 内层高斯牛顿迭代次数
+DIEKF_ADMM_rho     = 50;                % DIEKF_ADMM 惩罚参数
 
 
 %% 2. 路径配置与数据集加载
@@ -49,6 +51,10 @@ if run_flag == 0
         opts = detectImportOptions(result_file);
         opts.VariableTypes{1} = 'string';
         saved_result = readtable(result_file, opts);
+        
+        if ~all(ismember({'DIEKF', 'DIEKF_ADMM'}, saved_result.Properties.VariableNames))
+            error('检测到旧版 CSV 结果文件（缺少 DIEKF 或 DIEKF_ADMM 列），请先将 run_flag 设为 1 重新运行并保存结果！');
+        end
         
         % 尝试获取批次数量以保持表头打印完全一致
         if exist(data_file, 'file')
@@ -107,11 +113,11 @@ fprintf('数据集加载成功: %s\n', data_file);
 fprintf('>> 共 %d 个独立批次，每批 %d 步；本次每批使用 %d 步 (%.1f%%)\n', ...
     repeat_count, N_steps_batch, N_steps_use, data_ratio * 100);
 
-% 2.6 提取传感器噪声协方差参数（确保三个算法条件完全一致）
+% 2.6 提取传感器噪声协方差参数（确保四个算法条件完全一致）
 Noise.IMU_Sigma_a   = S.IMU_noise_params.sigma_na^2 * eye(3);
 Noise.IMU_Sigma_w   = S.IMU_noise_params.sigma_nw^2 * eye(3);
-Noise.UWB_sigma_anc = S.UWB_noise_params.sigma_anc;
-Noise.UWB_sigma_rel = S.UWB_noise_params.sigma_rel;
+Noise.UWB_sigma_anc = 0.1;
+Noise.UWB_sigma_rel = 0.1;
 
 
 %% 3. 生成静态拓扑掩码 (三档基站 + 对称环形车间拓扑)
@@ -120,11 +126,12 @@ Noise.UWB_sigma_rel = S.UWB_noise_params.sigma_rel;
     Vehicle_num, Anchor_num, neighbor_k);
 
 
-%% 4. 逐批次独立运行三个滤波器
+%% 4. 逐批次独立运行四个滤波器
 % -------------------------------------------------------------------------
-rmse_p_dekf_all  = zeros(Vehicle_num, repeat_count);
-rmse_p_diekf_all = zeros(Vehicle_num, repeat_count);
-rmse_p_dmlkf_all = zeros(Vehicle_num, repeat_count);
+rmse_p_dekf_all       = zeros(Vehicle_num, repeat_count);
+rmse_p_diekf_all      = zeros(Vehicle_num, repeat_count);
+rmse_p_diekf_admm_all = zeros(Vehicle_num, repeat_count);
+rmse_p_dmlkf_all      = zeros(Vehicle_num, repeat_count);
 
 for r = 1:repeat_count
     fprintf('  - 正在处理第 %d/%d 批次数据...\n', r, repeat_count);
@@ -133,35 +140,39 @@ for r = 1:repeat_count
     batch_trajectories = extract_batch( ...
         trajectories, r, N_steps_batch, N_uwb_per_batch);
 
-    % 运行三种滤波算法并获取各车 RMSE
+    % 运行四种滤波算法并获取各车 RMSE
     batch_result = run_batch( ...
         batch_trajectories, anchors, Anchor_Mask, V2V_Mask, ...
         Vehicle_num, Anchor_num, N_steps_use, bias_comp_ratio, Noise, ...
+        DIEKF_max_iter, ...
         DMLKF_max_iter, DMLKF_beta_inv, DMLKF_print_flag, ...
-        DIEKF_ADMM_iter, DIEKF_GN_iter, DIEKF_rho);
+        DIEKF_ADMM_iter, DIEKF_ADMM_GN_iter, DIEKF_ADMM_rho);
 
     % 记录当前批次各车辆的位置 RMSE
-    rmse_p_dekf_all(:, r)  = batch_result.rmse_p_dekf;
-    rmse_p_diekf_all(:, r) = batch_result.rmse_p_diekf;
-    rmse_p_dmlkf_all(:, r) = batch_result.rmse_p_dmlkf;
+    rmse_p_dekf_all(:, r)       = batch_result.rmse_p_dekf;
+    rmse_p_diekf_all(:, r)      = batch_result.rmse_p_diekf;
+    rmse_p_diekf_admm_all(:, r) = batch_result.rmse_p_diekf_admm;
+    rmse_p_dmlkf_all(:, r)      = batch_result.rmse_p_dmlkf;
 end
 
 
 %% 5. 构造“各车辆批次平均 + 全网平均(Avg)”结果表并保存
 % -------------------------------------------------------------------------
 % 计算每辆车在所有批次上的平均位置 RMSE
-rmse_p_dekf  = mean(rmse_p_dekf_all, 2);
-rmse_p_diekf = mean(rmse_p_diekf_all, 2);
-rmse_p_dmlkf = mean(rmse_p_dmlkf_all, 2);
+rmse_p_dekf       = mean(rmse_p_dekf_all, 2);
+rmse_p_diekf      = mean(rmse_p_diekf_all, 2);
+rmse_p_diekf_admm = mean(rmse_p_diekf_admm_all, 2);
+rmse_p_dmlkf      = mean(rmse_p_dmlkf_all, 2);
 
 % 构造包含 VehID (1~Vehicle_num) 及最后一行 Avg 的结果表
 veh_labels = [string((1:Vehicle_num)'); "Avg"];
 result_table = table( ...
     veh_labels, ...
-    [rmse_p_dekf;  mean(rmse_p_dekf)], ...
-    [rmse_p_diekf; mean(rmse_p_diekf)], ...
-    [rmse_p_dmlkf; mean(rmse_p_dmlkf)], ...
-    'VariableNames', {'VehID', 'DEKF', 'DIEKF', 'DMLKF'});
+    [rmse_p_dekf;       mean(rmse_p_dekf)], ...
+    [rmse_p_diekf;      mean(rmse_p_diekf)], ...
+    [rmse_p_diekf_admm; mean(rmse_p_diekf_admm)], ...
+    [rmse_p_dmlkf;      mean(rmse_p_dmlkf)], ...
+    'VariableNames', {'VehID', 'DEKF', 'DIEKF', 'DIEKF_ADMM', 'DMLKF'});
 
 if save_flag
     if ~exist(result_dir, 'dir')
@@ -181,35 +192,35 @@ print_vehicle_results(result_table, repeat_count);
 
 % -------------------------------------------------------------------------
 % 函数: print_vehicle_results
-% 功能: 打印各车辆在所有批次上的平均位置 RMSE 表格（即原第二个表）
+% 功能: 打印各车辆在所有批次上的平均位置 RMSE 表格
 % -------------------------------------------------------------------------
 function print_vehicle_results(T, repeat_count)
     if ~isnan(repeat_count)
-        fprintf('\n============== 各车辆位置 RMSE 在 %d 个批次上的平均值 (单位: m) ==============\n', repeat_count);
+        fprintf('\n=================== 各车辆位置 RMSE 在 %d 个批次上的平均值 (单位: m) ===================\n', repeat_count);
     else
-        fprintf('\n============== 各车辆位置 RMSE 在多个批次上的平均值 (单位: m) ==============\n');
+        fprintf('\n=================== 各车辆位置 RMSE 在多个批次上的平均值 (单位: m) ===================\n');
     end
-    fprintf(' VehID  |    DEKF     |    DIEKF    |    DMLKF\n');
-    fprintf('-----------------------------------------------------------------------------\n');
+    fprintf(' VehID  |    DEKF     |    DIEKF    |  DIEKF_ADMM |    DMLKF\n');
+    fprintf('----------------------------------------------------------------------------------------\n');
     
     for i = 1:height(T)
         veh_label = string(T.VehID(i));
         if veh_label == "Avg" || veh_label == "Average"
-            fprintf('-----------------------------------------------------------------------------\n');
-            fprintf('  Avg   |   %8.4f  |   %8.4f  |   %8.4f\n', ...
-                T.DEKF(i), T.DIEKF(i), T.DMLKF(i));
+            fprintf('----------------------------------------------------------------------------------------\n');
+            fprintf('  Avg   |   %8.4f  |   %8.4f  |   %8.4f  |   %8.4f\n', ...
+                T.DEKF(i), T.DIEKF(i), T.DIEKF_ADMM(i), T.DMLKF(i));
         else
             veh_id = str2double(veh_label);
             if ~isnan(veh_id)
-                fprintf('  %2d    |   %8.4f  |   %8.4f  |   %8.4f\n', ...
-                    veh_id, T.DEKF(i), T.DIEKF(i), T.DMLKF(i));
+                fprintf('  %2d    |   %8.4f  |   %8.4f  |   %8.4f  |   %8.4f\n', ...
+                    veh_id, T.DEKF(i), T.DIEKF(i), T.DIEKF_ADMM(i), T.DMLKF(i));
             else
-                fprintf('  %-4s  |   %8.4f  |   %8.4f  |   %8.4f\n', ...
-                    veh_label, T.DEKF(i), T.DIEKF(i), T.DMLKF(i));
+                fprintf('  %-4s  |   %8.4f  |   %8.4f  |   %8.4f  |   %8.4f\n', ...
+                    veh_label, T.DEKF(i), T.DIEKF(i), T.DIEKF_ADMM(i), T.DMLKF(i));
             end
         end
     end
-    fprintf('=============================================================================\n\n');
+    fprintf('========================================================================================\n\n');
 end
 
 % -------------------------------------------------------------------------
@@ -300,13 +311,14 @@ end
 
 % -------------------------------------------------------------------------
 % 函数: run_batch
-% 功能: 在单个批次数据上同步执行 DEKF、DIEKF、DMLKF 的预测与更新，并计算各车 RMSE
+% 功能: 在单个批次数据上同步执行 DEKF、DIEKF、DIEKF_ADMM、DMLKF 的预测与更新，并计算各车 RMSE
 % -------------------------------------------------------------------------
 function result = run_batch( ...
         trajectories, anchors, Anchor_Mask, V2V_Mask, ...
         Vehicle_num, Anchor_num, N_steps, bias_comp_ratio, Noise, ...
+        DIEKF_max_iter, ...
         DMLKF_max_iter, DMLKF_beta_inv, DMLKF_print_flag, ...
-        DIEKF_ADMM_iter, DIEKF_GN_iter, DIEKF_rho)
+        DIEKF_ADMM_iter, DIEKF_ADMM_GN_iter, DIEKF_ADMM_rho)
     
     dt_imu = trajectories.V1.Time_true(2) - trajectories.V1.Time_true(1);
 
@@ -327,7 +339,7 @@ function result = run_batch( ...
         R0(:, :, i) = trajectories.(v_name).R_true(:, :, 1);
     end
 
-    % --- 2. 实例化并配置三个滤波器 ---
+    % --- 2. 实例化并配置四个滤波器 ---
     kf_dekf = DEKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
     kf_dekf.IMU_Sigma_a   = Noise.IMU_Sigma_a;
     kf_dekf.IMU_Sigma_w   = Noise.IMU_Sigma_w;
@@ -335,19 +347,27 @@ function result = run_batch( ...
     kf_dekf.UWB_sigma_rel = Noise.UWB_sigma_rel;
 
     kf_diekf = DIEKF(Vehicle_num, Anchor_num, anchors, dt_imu, ...
-        p0, v0, R0, V2V_Mask, DIEKF_ADMM_iter, Noise);
+        p0, v0, R0, DIEKF_max_iter, Noise);
     kf_diekf.IMU_Sigma_a   = Noise.IMU_Sigma_a;
     kf_diekf.IMU_Sigma_w   = Noise.IMU_Sigma_w;
     kf_diekf.UWB_sigma_anc = Noise.UWB_sigma_anc;
     kf_diekf.UWB_sigma_rel = Noise.UWB_sigma_rel;
-    kf_diekf.ADMM_iter     = DIEKF_ADMM_iter;
-    kf_diekf.GN_iter       = DIEKF_GN_iter;
-    kf_diekf.rho           = DIEKF_rho;
-    if isprop(kf_diekf, 'M_in')
-        kf_diekf.M_in = DIEKF_GN_iter;
+    kf_diekf.max_iter      = DIEKF_max_iter;
+
+    kf_diekf_admm = DIEKF_ADMM(Vehicle_num, Anchor_num, anchors, dt_imu, ...
+        p0, v0, R0, V2V_Mask, DIEKF_ADMM_iter, Noise);
+    kf_diekf_admm.IMU_Sigma_a   = Noise.IMU_Sigma_a;
+    kf_diekf_admm.IMU_Sigma_w   = Noise.IMU_Sigma_w;
+    kf_diekf_admm.UWB_sigma_anc = Noise.UWB_sigma_anc;
+    kf_diekf_admm.UWB_sigma_rel = Noise.UWB_sigma_rel;
+    kf_diekf_admm.ADMM_iter     = DIEKF_ADMM_iter;
+    kf_diekf_admm.GN_iter       = DIEKF_ADMM_GN_iter;
+    kf_diekf_admm.rho           = DIEKF_ADMM_rho;
+    if isprop(kf_diekf_admm, 'M_in')
+        kf_diekf_admm.M_in = DIEKF_ADMM_GN_iter;
     end
-    if isprop(kf_diekf, 'max_iter')
-        kf_diekf.max_iter = DIEKF_ADMM_iter;
+    if isprop(kf_diekf_admm, 'max_iter')
+        kf_diekf_admm.max_iter = DIEKF_ADMM_iter;
     end
 
     kf_dmlkf = DMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, ...
@@ -361,26 +381,32 @@ function result = run_batch( ...
     kf_dmlkf.print_flag    = DMLKF_print_flag;
 
     % --- 3. 预分配状态估计存储空间并写入初值 ---
-    est_p_dekf  = zeros(N_steps, 3, Vehicle_num);
-    est_v_dekf  = zeros(N_steps, 3, Vehicle_num);
-    est_R_dekf  = zeros(3, 3, Vehicle_num, N_steps);
-    est_p_diekf = zeros(N_steps, 3, Vehicle_num);
-    est_v_diekf = zeros(N_steps, 3, Vehicle_num);
-    est_R_diekf = zeros(3, 3, Vehicle_num, N_steps);
-    est_p_dmlkf = zeros(N_steps, 3, Vehicle_num);
-    est_v_dmlkf = zeros(N_steps, 3, Vehicle_num);
-    est_R_dmlkf = zeros(3, 3, Vehicle_num, N_steps);
+    est_p_dekf       = zeros(N_steps, 3, Vehicle_num);
+    est_v_dekf       = zeros(N_steps, 3, Vehicle_num);
+    est_R_dekf       = zeros(3, 3, Vehicle_num, N_steps);
+    est_p_diekf      = zeros(N_steps, 3, Vehicle_num);
+    est_v_diekf      = zeros(N_steps, 3, Vehicle_num);
+    est_R_diekf      = zeros(3, 3, Vehicle_num, N_steps);
+    est_p_diekf_admm = zeros(N_steps, 3, Vehicle_num);
+    est_v_diekf_admm = zeros(N_steps, 3, Vehicle_num);
+    est_R_diekf_admm = zeros(3, 3, Vehicle_num, N_steps);
+    est_p_dmlkf      = zeros(N_steps, 3, Vehicle_num);
+    est_v_dmlkf      = zeros(N_steps, 3, Vehicle_num);
+    est_R_dmlkf      = zeros(3, 3, Vehicle_num, N_steps);
 
     for i = 1:Vehicle_num
-        est_p_dekf(1, :, i)    = p0(3*i-2 : 3*i)';
-        est_v_dekf(1, :, i)    = v0(3*i-2 : 3*i)';
-        est_R_dekf(:, :, i, 1) = R0(:, :, i);
-        est_p_diekf(1, :, i)   = p0(3*i-2 : 3*i)';
-        est_v_diekf(1, :, i)   = v0(3*i-2 : 3*i)';
-        est_R_diekf(:, :, i, 1)= R0(:, :, i);
-        est_p_dmlkf(1, :, i)   = p0(3*i-2 : 3*i)';
-        est_v_dmlkf(1, :, i)   = v0(3*i-2 : 3*i)';
-        est_R_dmlkf(:, :, i, 1)= R0(:, :, i);
+        est_p_dekf(1, :, i)          = p0(3*i-2 : 3*i)';
+        est_v_dekf(1, :, i)          = v0(3*i-2 : 3*i)';
+        est_R_dekf(:, :, i, 1)       = R0(:, :, i);
+        est_p_diekf(1, :, i)         = p0(3*i-2 : 3*i)';
+        est_v_diekf(1, :, i)         = v0(3*i-2 : 3*i)';
+        est_R_diekf(:, :, i, 1)      = R0(:, :, i);
+        est_p_diekf_admm(1, :, i)    = p0(3*i-2 : 3*i)';
+        est_v_diekf_admm(1, :, i)    = v0(3*i-2 : 3*i)';
+        est_R_diekf_admm(:, :, i, 1) = R0(:, :, i);
+        est_p_dmlkf(1, :, i)         = p0(3*i-2 : 3*i)';
+        est_v_dmlkf(1, :, i)         = v0(3*i-2 : 3*i)';
+        est_R_dmlkf(:, :, i, 1)      = R0(:, :, i);
     end
 
     % --- 4. 时间步主循环 (IMU 预测 + UWB 更新) ---
@@ -399,6 +425,7 @@ function result = run_batch( ...
 
         kf_dekf.predict(acc_m, gyro_m);
         kf_diekf.predict(acc_m, gyro_m);
+        kf_diekf_admm.predict(acc_m, gyro_m);
         kf_dmlkf.predict(acc_m, gyro_m);
 
         curr_time = trajectories.V1.Time_true(k);
@@ -421,20 +448,24 @@ function result = run_batch( ...
 
             kf_dekf.update(uwb_anc_masked, uwb_rel_masked);
             kf_diekf.update(uwb_anc_masked, uwb_rel_masked);
+            kf_diekf_admm.update(uwb_anc_masked, uwb_rel_masked);
             kf_dmlkf.update(uwb_anc_masked, uwb_rel_masked);
             uwb_idx = uwb_idx + 1;
         end
 
         for i = 1:Vehicle_num
-            est_p_dekf(k, :, i)    = kf_dekf.Nodes{i}.p';
-            est_v_dekf(k, :, i)    = kf_dekf.Nodes{i}.v';
-            est_R_dekf(:, :, i, k) = kf_dekf.Nodes{i}.R;
-            est_p_diekf(k, :, i)   = kf_diekf.Nodes{i}.p';
-            est_v_diekf(k, :, i)   = kf_diekf.Nodes{i}.v';
-            est_R_diekf(:, :, i, k)= kf_diekf.Nodes{i}.R;
-            est_p_dmlkf(k, :, i)   = kf_dmlkf.Nodes{i}.p';
-            est_v_dmlkf(k, :, i)   = kf_dmlkf.Nodes{i}.v';
-            est_R_dmlkf(:, :, i, k)= kf_dmlkf.Nodes{i}.R;
+            est_p_dekf(k, :, i)          = kf_dekf.Nodes{i}.p';
+            est_v_dekf(k, :, i)          = kf_dekf.Nodes{i}.v';
+            est_R_dekf(:, :, i, k)       = kf_dekf.Nodes{i}.R;
+            est_p_diekf(k, :, i)         = kf_diekf.Nodes{i}.p';
+            est_v_diekf(k, :, i)         = kf_diekf.Nodes{i}.v';
+            est_R_diekf(:, :, i, k)      = kf_diekf.Nodes{i}.R;
+            est_p_diekf_admm(k, :, i)    = kf_diekf_admm.Nodes{i}.p';
+            est_v_diekf_admm(k, :, i)    = kf_diekf_admm.Nodes{i}.v';
+            est_R_diekf_admm(:, :, i, k) = kf_diekf_admm.Nodes{i}.R;
+            est_p_dmlkf(k, :, i)         = kf_dmlkf.Nodes{i}.p';
+            est_v_dmlkf(k, :, i)         = kf_dmlkf.Nodes{i}.v';
+            est_R_dmlkf(:, :, i, k)      = kf_dmlkf.Nodes{i}.R;
         end
     end
 
@@ -445,17 +476,22 @@ function result = run_batch( ...
     [result.rmse_p_diekf, rmse_v_diekf, rmse_att_diekf] = ...
         calc_rmse(trajectories, est_p_diekf, est_v_diekf, ...
         est_R_diekf, Vehicle_num, N_steps);
+    [result.rmse_p_diekf_admm, rmse_v_diekf_admm, rmse_att_diekf_admm] = ...
+        calc_rmse(trajectories, est_p_diekf_admm, est_v_diekf_admm, ...
+        est_R_diekf_admm, Vehicle_num, N_steps);
     [result.rmse_p_dmlkf, rmse_v_dmlkf, rmse_att_dmlkf] = ...
         calc_rmse(trajectories, est_p_dmlkf, est_v_dmlkf, ...
         est_R_dmlkf, Vehicle_num, N_steps);
 
     % 保留全状态指标，便于后续需要时扩展输出
-    result.rmse_v_dekf    = rmse_v_dekf;
-    result.rmse_v_diekf   = rmse_v_diekf;
-    result.rmse_v_dmlkf   = rmse_v_dmlkf;
-    result.rmse_att_dekf  = rmse_att_dekf;
-    result.rmse_att_diekf = rmse_att_diekf;
-    result.rmse_att_dmlkf = rmse_att_dmlkf;
+    result.rmse_v_dekf         = rmse_v_dekf;
+    result.rmse_v_diekf        = rmse_v_diekf;
+    result.rmse_v_diekf_admm   = rmse_v_diekf_admm;
+    result.rmse_v_dmlkf        = rmse_v_dmlkf;
+    result.rmse_att_dekf       = rmse_att_dekf;
+    result.rmse_att_diekf      = rmse_att_diekf;
+    result.rmse_att_diekf_admm = rmse_att_diekf_admm;
+    result.rmse_att_dmlkf      = rmse_att_dmlkf;
 end
 
 % -------------------------------------------------------------------------

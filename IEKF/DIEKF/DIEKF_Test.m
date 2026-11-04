@@ -1,44 +1,28 @@
 % DIEKF_Test.m 
-% DIEKF (9D 分布式迭代扩展卡尔曼滤波 IEKF-ADMM) - 测试与评价脚本
+% 同步测试 DIEKF_ADMM 与 纯局部 DIEKF 并分别输出 RMSE 结果
 clc; clear; close all;
 
 %% 1. 测试参数与运行配置
 Vehicle_num = 8;            
-Anchor_num  = 10;     
+Anchor_num  = 4;     
 neighbor_k  = 4; % 邻居数
-run_flag    = 1;   % 0: 若存在结果则直接打印不运行; 1: 强制重新运行
-save_flag   = 0;
 
 % 0.7为保留 30% 未知零偏以破坏先验 (1.0为完全补偿)
 bias_comp_ratio = 1; 
 
-% 控制截取数据集的比例 (例如 0.8 表示只跑前 80% 的数据，1.0为全部)
+% 控制截取数据集的比例 (例如 0.3 表示只跑前 30% 的数据，1.0为全部)
 data_ratio  = 0.3;
 
 % 路径配置
-data_dir = 'E:\DMLKF_code\Data';
-res_dir  = 'E:\DMLKF_code\IEKF\DIEKF\RESULT';
-if ~exist(res_dir, 'dir')
-    mkdir(res_dir);
-end
-
+data_dir  = 'E:\DMLKF_code\Data';
 data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_3D.mat', Vehicle_num, Anchor_num));
-res_file  = fullfile(res_dir, sprintf('DIEKF_Veh%d_Anc%d_20.mat', Vehicle_num, Anchor_num));
 
-%% 2. 检查结果文件是否存在 (run_flag 机制)
-if run_flag == 0 && exist(res_file, 'file')
-    fprintf('检测到结果文件已存在，直接加载并打印结果 (若需重跑请置 run_flag=1)...\n');
-    load(res_file, 'rmse_p', 'rmse_v', 'rmse_att', 'mean_rmse_p', 'mean_rmse_v', 'mean_rmse_att');
-    print_results(Vehicle_num, rmse_p, rmse_v, rmse_att, mean_rmse_p, mean_rmse_v, mean_rmse_att);
-    return;
-end
-
-%% 3. 加载数据集
+%% 2. 加载数据集
 if ~exist(data_file, 'file')
     error('未找到数据集文件: %s\n请先运行生成脚本生成该数据！', data_file);
 end
 load(data_file, 'trajectories', 'anchors', 'IMU_noise_params', 'UWB_noise_params');
-fprintf('数据集加载成功，开始运行 DIEKF 算法...\n');
+fprintf('数据集加载成功，开始运行 DIEKF_ADMM 与 DIEKF 算法...\n');
 
 N_steps_total = length(trajectories.V1.Time_true);
 N_steps = max(2, round(N_steps_total * data_ratio)); % 计算截断步数(至少保证有2步)
@@ -46,7 +30,7 @@ fprintf('>> 实验设定的数据截取比例: %.1f%%\n', data_ratio * 100);
 fprintf('>> 实际运行步数 / 总步数: %d / %d\n', N_steps, N_steps_total);
 dt_imu = trajectories.V1.Time_true(2) - trajectories.V1.Time_true(1);
 
-%% 4. 生成静态拓扑掩码 (三档基站 + K-Regular 车间)
+%% 3. 生成静态拓扑掩码 (三档基站 + K-Regular 车间)
 % A. 基站掩码 (30% 全基站, 50% 半基站, 20% 无基站)
 N_tier1 = round(0.3 * Vehicle_num);
 N_tier2 = round(0.5 * Vehicle_num);
@@ -68,7 +52,6 @@ end
 % B. 车间掩码 (对称环形拓扑)
 K_degree = min(neighbor_k, Vehicle_num - 1); 
 
-% 如果总节点数为奇数，且要求的度数也为奇数，则数学上无法构成正则对称图，直接报错终止
 if mod(Vehicle_num, 2) ~= 0 && mod(K_degree, 2) ~= 0
     error(['图论限制: 车辆总数(%d)与邻居数(%d)均为奇数，数学上无法构成完全对称的双向测距拓扑！\n' ...
            ' ---> 解决方案: 请在脚本顶部的测试参数中，将 neighbor_k 修改为偶数，或者将 Vehicle_num 修改为偶数。'], ...
@@ -76,31 +59,27 @@ if mod(Vehicle_num, 2) ~= 0 && mod(K_degree, 2) ~= 0
 end
 
 V2V_Mask = zeros(Vehicle_num, Vehicle_num);
-K_half = floor(K_degree / 2); % 绝对对称的前后连接数
+K_half = floor(K_degree / 2);
 
 for i = 1:Vehicle_num
-    % 1. 绝对对称地连接前后各 K_half 个节点
     for d = 1:K_half
-        idx_forward = mod(i + d - 1, Vehicle_num) + 1;
+        idx_forward  = mod(i + d - 1, Vehicle_num) + 1;
         idx_backward = mod(i - d - 1, Vehicle_num) + 1;
-        V2V_Mask(i, idx_forward) = 1;
+        V2V_Mask(i, idx_forward)  = 1;
         V2V_Mask(i, idx_backward) = 1;
     end
-    
-    % 2. 处理 K 为奇数的情况：连接圆环正对面的节点 (此时 Vehicle_num 必然为偶数)
     if mod(K_degree, 2) ~= 0
         idx_opposite = mod(i + Vehicle_num/2 - 1, Vehicle_num) + 1;
         V2V_Mask(i, idx_opposite) = 1;
     end
 end
-V2V_Mask(logical(eye(Vehicle_num))) = 0; % 自身对自身设0
+V2V_Mask(logical(eye(Vehicle_num))) = 0;
 
-% 安全最后校验：确保最终生成的矩阵绝对对称
 if ~isequal(V2V_Mask, V2V_Mask')
     error('V2V_Mask 矩阵非对称，请检查拓扑生成逻辑！');
 end
 
-%% 5. 初始化 DIEKF 滤波器 (使用列向量锁定避免维度崩溃)
+%% 4. 初始化 DIEKF_ADMM 与 DIEKF 滤波器
 p0 = zeros(3 * Vehicle_num, 1);
 v0 = zeros(3 * Vehicle_num, 1);
 R0 = zeros(3, 3, Vehicle_num);
@@ -114,43 +93,58 @@ for i = 1:Vehicle_num
     R0(:, :, i)     = trajectories.(v_name).R_true(:, :, 1); 
 end
 
-kf = DIEKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask);
+% (1) 实例化并配置 DIEKF_ADMM
+kf_admm = DIEKF_ADMM(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask);
+kf_admm.IMU_Sigma_a   = (0.07)^2 * eye(3);
+kf_admm.IMU_Sigma_w   = (0.007)^2 * eye(3);
+kf_admm.UWB_sigma_anc = 0.1;
+kf_admm.UWB_sigma_rel = 0.1;
+kf_admm.rho           = 50;
+kf_admm.ADMM_iter     = 300;
+kf_admm.GN_iter       = 5;
 
-kf.IMU_Sigma_a   = (0.07)^2 * eye(3);
-kf.IMU_Sigma_w   = (0.007)^2 * eye(3);
-kf.UWB_sigma_anc = 0.1;
-kf.UWB_sigma_rel = 0.1;
-
-% ADMM 惩罚参数与内层 GN 步数配置
-kf.rho  = 50;
-kf.ADMM_iter = 300;
-kf.GN_iter = 5;
+% (2) 实例化并配置 纯局部 DIEKF
+kf_diekf = DIEKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
+kf_diekf.IMU_Sigma_a   = (0.07)^2 * eye(3);
+kf_diekf.IMU_Sigma_w   = (0.007)^2 * eye(3);
+kf_diekf.UWB_sigma_anc = 0.1;
+kf_diekf.UWB_sigma_rel = 0.1;
+kf_diekf.max_iter      = 50;
 
 % 结果存储空间
-est_p = zeros(N_steps, 3, Vehicle_num);
-est_v = zeros(N_steps, 3, Vehicle_num);
-est_R = zeros(3, 3, Vehicle_num, N_steps);
+est_p_admm  = zeros(N_steps, 3, Vehicle_num);
+est_v_admm  = zeros(N_steps, 3, Vehicle_num);
+est_R_admm  = zeros(3, 3, Vehicle_num, N_steps);
+
+est_p_diekf = zeros(N_steps, 3, Vehicle_num);
+est_v_diekf = zeros(N_steps, 3, Vehicle_num);
+est_R_diekf = zeros(3, 3, Vehicle_num, N_steps);
+
 for i = 1:Vehicle_num
-    est_p(1, :, i) = p0(3*i-2 : 3*i)';
-    est_v(1, :, i) = v0(3*i-2 : 3*i)';
-    est_R(:, :, i, 1) = R0(:, :, i);
+    est_p_admm(1, :, i)  = p0(3*i-2 : 3*i)';
+    est_v_admm(1, :, i)  = v0(3*i-2 : 3*i)';
+    est_R_admm(:, :, i, 1)  = R0(:, :, i);
+    
+    est_p_diekf(1, :, i) = p0(3*i-2 : 3*i)';
+    est_v_diekf(1, :, i) = v0(3*i-2 : 3*i)';
+    est_R_diekf(:, :, i, 1) = R0(:, :, i);
 end
 
-%% 6. 滤波主循环
+%% 5. 滤波主循环
 uwb_idx = 2; 
 UWB_Time_Vec = trajectories.V1.UWB_Anchor(:, 1);
 fprintf('开始迭代仿真 (共 %d 步)...\n', N_steps);
 for k = 2:N_steps
     % --- A. 100Hz 预测过程 ---
-    acc_m = zeros(3, Vehicle_num);
+    acc_m  = zeros(3, Vehicle_num);
     gyro_m = zeros(3, Vehicle_num);
     for i = 1:Vehicle_num
         v_name = sprintf('V%d', i);
-        
-        acc_m(:, i)  = trajectories.(v_name).IMU_acc_m(k-1, :)' - bias_comp_ratio * trajectories.(v_name).IMU_bias_a_true(k-1, :)';
+        acc_m(:, i)  = trajectories.(v_name).IMU_acc_m(k-1, :)'  - bias_comp_ratio * trajectories.(v_name).IMU_bias_a_true(k-1, :)';
         gyro_m(:, i) = trajectories.(v_name).IMU_gyro_m(k-1, :)' - bias_comp_ratio * trajectories.(v_name).IMU_bias_w_true(k-1, :)';
     end
-    kf.predict(acc_m, gyro_m);
+    kf_admm.predict(acc_m, gyro_m);
+    kf_diekf.predict(acc_m, gyro_m);
     
     % --- B. 10Hz 更新过程 (严格应用掩码过滤) ---
     curr_time = trajectories.V1.Time_true(k);
@@ -170,16 +164,21 @@ for k = 2:N_steps
         uwb_rel_masked = uwb_rel_raw;
         uwb_rel_masked(V2V_Mask == 0) = NaN;
         
-        % 输入滤波器
-        kf.update(uwb_anc_masked, uwb_rel_masked);
+        % 输入两个滤波器
+        kf_admm.update(uwb_anc_masked, uwb_rel_masked);
+        kf_diekf.update(uwb_anc_masked, uwb_rel_masked);
         uwb_idx = uwb_idx + 1;
     end
     
     % --- C. 提取当前步沙盒内的局部估计结果 ---
     for i = 1:Vehicle_num
-        est_p(k, :, i) = kf.Nodes{i}.p';
-        est_v(k, :, i) = kf.Nodes{i}.v';
-        est_R(:, :, i, k) = kf.Nodes{i}.R;
+        est_p_admm(k, :, i)     = kf_admm.Nodes{i}.p';
+        est_v_admm(k, :, i)     = kf_admm.Nodes{i}.v';
+        est_R_admm(:, :, i, k)  = kf_admm.Nodes{i}.R;
+        
+        est_p_diekf(k, :, i)    = kf_diekf.Nodes{i}.p';
+        est_v_diekf(k, :, i)    = kf_diekf.Nodes{i}.v';
+        est_R_diekf(:, :, i, k) = kf_diekf.Nodes{i}.R;
     end
     
     if mod(k, 2000) == 0
@@ -187,51 +186,44 @@ for k = 2:N_steps
     end
 end
 
-%% 7. 计算 RMSE
-rmse_p = zeros(Vehicle_num, 1);
-rmse_v = zeros(Vehicle_num, 1);
-rmse_att = zeros(Vehicle_num, 1);
-for i = 1:Vehicle_num
-    v_name = sprintf('V%d', i);
-    
-    % 截取前 N_steps 的轨迹真值，保证与 est_p 的维度一致
-    true_p = [trajectories.(v_name).X_true(1:N_steps), ...
-              trajectories.(v_name).Y_true(1:N_steps), ...
-              trajectories.(v_name).Z_true(1:N_steps)];
-              
-    true_v = [trajectories.(v_name).Vx_true(1:N_steps), ...
-              trajectories.(v_name).Vy_true(1:N_steps), ...
-              trajectories.(v_name).Vz_true(1:N_steps)];
-    
-    rmse_p(i) = sqrt(mean(sum((est_p(:, :, i) - true_p).^2, 2)));
-    rmse_v(i) = sqrt(mean(sum((est_v(:, :, i) - true_v).^2, 2)));
-    
-    err_att_seq = zeros(N_steps, 1);
-    for k = 1:N_steps
-        R_t = trajectories.(v_name).R_true(:, :, k);
-        R_e = est_R(:, :, i, k);
-        R_err = R_t' * R_e;
-        tr = max(-1, min(3, trace(R_err)));
-        err_att_seq(k) = acos((tr - 1) / 2) * (180 / pi);
+%% 6. 分别计算并输出两个算法的 RMSE
+[rmse_p_admm,  rmse_v_admm,  rmse_att_admm]  = calc_rmse(trajectories, est_p_admm,  est_v_admm,  est_R_admm,  Vehicle_num, N_steps);
+[rmse_p_diekf, rmse_v_diekf, rmse_att_diekf] = calc_rmse(trajectories, est_p_diekf, est_v_diekf, est_R_diekf, Vehicle_num, N_steps);
+
+print_results('DIEKF_ADMM', Vehicle_num, rmse_p_admm,  rmse_v_admm,  rmse_att_admm,  mean(rmse_p_admm),  mean(rmse_v_admm),  mean(rmse_att_admm));
+print_results('DIEKF',      Vehicle_num, rmse_p_diekf, rmse_v_diekf, rmse_att_diekf, mean(rmse_p_diekf), mean(rmse_v_diekf), mean(rmse_att_diekf));
+
+%% ==== 局部辅助函数 ====
+function [rmse_p, rmse_v, rmse_att] = calc_rmse(trajectories, est_p, est_v, est_R, Vehicle_num, N_steps)
+    rmse_p   = zeros(Vehicle_num, 1);
+    rmse_v   = zeros(Vehicle_num, 1);
+    rmse_att = zeros(Vehicle_num, 1);
+    for i = 1:Vehicle_num
+        v_name = sprintf('V%d', i);
+        true_p = [trajectories.(v_name).X_true(1:N_steps), ...
+                  trajectories.(v_name).Y_true(1:N_steps), ...
+                  trajectories.(v_name).Z_true(1:N_steps)];
+        true_v = [trajectories.(v_name).Vx_true(1:N_steps), ...
+                  trajectories.(v_name).Vy_true(1:N_steps), ...
+                  trajectories.(v_name).Vz_true(1:N_steps)];
+        
+        rmse_p(i) = sqrt(mean(sum((est_p(:, :, i) - true_p).^2, 2)));
+        rmse_v(i) = sqrt(mean(sum((est_v(:, :, i) - true_v).^2, 2)));
+        
+        err_att_seq = zeros(N_steps, 1);
+        for k = 1:N_steps
+            R_t = trajectories.(v_name).R_true(:, :, k);
+            R_e = est_R(:, :, i, k);
+            R_err = R_t' * R_e;
+            tr = max(-1, min(3, trace(R_err)));
+            err_att_seq(k) = acos((tr - 1) / 2) * (180 / pi);
+        end
+        rmse_att(i) = sqrt(mean(err_att_seq.^2));
     end
-    rmse_att(i) = sqrt(mean(err_att_seq.^2));
 end
-mean_rmse_p = mean(rmse_p);
-mean_rmse_v = mean(rmse_v);
-mean_rmse_att = mean(rmse_att);
 
-%% 8. 保存结果文件并打印
-if save_flag == 1
-    save(res_file, 'est_p', 'est_v', 'est_R', 'rmse_p', 'rmse_v', 'rmse_att', ...
-                   'mean_rmse_p', 'mean_rmse_v', 'mean_rmse_att', ...
-                   'Anchor_Mask', 'V2V_Mask');
-    fprintf('运行完成，结果已保存至: %s\n', res_file);
-end
-print_results(Vehicle_num, rmse_p, rmse_v, rmse_att, mean_rmse_p, mean_rmse_v, mean_rmse_att);
-
-%% ==== 局部打印辅助函数 ====
-function print_results(Vehicle_num, rmse_p, rmse_v, rmse_att, m_p, m_v, m_att)
-    fprintf('\n================== DIEKF RMSE 结果 ==================\n');
+function print_results(alg_name, Vehicle_num, rmse_p, rmse_v, rmse_att, m_p, m_v, m_att)
+    fprintf('\n================ %s RMSE 结果 ================\n', alg_name);
     fprintf(' VehID  |  Pos(m)  |  Vel(m/s)  |  Att(deg)\n');
     fprintf('-----------------------------------------------------\n');
     for i = 1:Vehicle_num

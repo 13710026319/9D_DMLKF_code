@@ -56,7 +56,11 @@
 1、昨晚发现DMLKF优于DEKF的情况其实依然可以实现，只是需要用之前2026年9月份左右的那一批Data\generate_data与env_setup搭配（主要是env_setup当中的蜂窝型轨迹+Z轴1-2m变动的基站布局），之前被agent莫名其妙改了该配置然后提交git了，所以昨晚生成数据集测试才发现DMLKF又不行了，现在已经找回来了，DMLKF优于DEKF。
 2、对于昨晚iter_compare_main.m所说的情况，其实iter=1时候本质上DMLKF就是DEKF（信息滤波），而之前集中式下MLKF要优于EKF，则需要一定的先验初始扰动，这个可以后续试一下看看。
 
-
+2026.11.4
+1、今天主要是加入了DIEKF，将之前的DIEKF修改名为DIEKF_ADMM，其中DIEKF是没有联合状态普通DIEKF。
+2、在compare_DEKF_DIEKF_DMLKF.m中进行对比，使用的还是DEKF_DIEKF_DMLKF_100_A数据集（0.2的量，偏置完全补偿），该数据集下最优的参数DMLKF ( iter=10, beta=70, RMSE = 0.0876), DIEKF ( ADMM_iter=1, GN_iter=5, RMSE=0.1147)。DEKF(RMSE=1.0+)，DIEKF(RMSE=1.0+）。
+3、上述数据意味着DIEKF的ADMM收敛有点问题，考虑试试pure数据集避免RMSE回升问题看看。发现pure不行，UWB没有噪声的情况下DMLKF反倒不如其他三个了。
+4、前面三者RMSE的对比数据还是感觉有点极端，尝试短时间（15S左右）多批次求均值试试。
 
 
 
