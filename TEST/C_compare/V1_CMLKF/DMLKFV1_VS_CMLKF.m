@@ -1,25 +1,51 @@
-% DMLKFV1_VS_CMLKF.m
-% 集中式 CMLKF 与 分布式 DMLKF 对比测试脚本
-% 验证目的：在全基站观测下，DMLKF 随车间邻居数增加，逐渐逼近 CMLKF (理论最优下界)
+% =========================================================================
+% 脚本名称: DMLKFV1_VS_CMLKF.m
+% 功能描述: 集中式 CMLKF 与 分布式 DMLKF 对比测试脚本
+% 验证目的: 在全基站观测下，DMLKF 随车间邻居数增加，逐渐逼近 CMLKF (理论最优下界)
+% =========================================================================
 clc; clear; close all;
 
 %% 1. 实验参数与运行配置
 Vehicle_num = 8;            
 Anchor_num  = 4;             
-K_test_list = 4:7; % 邻居数
+K_test_list = 4:7;      % 邻居数列表
 
 % 保留一定比例的零偏误差以破坏 IMU 先验，凸显测距优化优势 (1.0为完全补偿, 0.7为保留30%漂移)
 bias_comp_ratio = 1; 
 
-% =========================================================================
 % [数据集截取比例] (例如: 0.2 表示只取前 20% 的数据进行测试，1.0 为完整测试)
-data_ratio  = 1;
-% =========================================================================
+data_ratio = 1;
 
-% 路径配置
-% data_dir = 'E:\DMLKF_code\Data';
-data_dir = 'E:\DMLKF_code\TEST\C_compare\V1_CMLKF\Data';
-data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_pure.mat', Vehicle_num, Anchor_num));
+% 运行与保存控制标志
+save_flag  = 1;         % 1: 保存汇总表(CSV)与对比图(PNG); 0: 不保存
+run_flag   = 1;         % 1: 运行实验; 0: 仅读取已有结果并打印、绘图
+
+% 路径配置（锁定在当前脚本所在的 V1_CMLKF 文件夹下）
+test_dir    = fileparts(mfilename('fullpath'));
+data_dir    = fullfile(test_dir, 'Data');
+result_dir  = fullfile(test_dir, 'Result');
+
+data_file   = fullfile(data_dir, sprintf( ...
+    'Trj_Veh%d_Anc%d_pure.mat', Vehicle_num, Anchor_num));
+result_file = fullfile(result_dir, sprintf( ...
+    'V1_CMLKF_Veh%d_Anc%d_K%d-%d.csv', Vehicle_num, Anchor_num, min(K_test_list), max(K_test_list)));
+plot_file   = fullfile(result_dir, sprintf( ...
+    'V1_CMLKF_Veh%d_Anc%d_K%d-%d.png', Vehicle_num, Anchor_num, min(K_test_list), max(K_test_list)));
+
+% 仅读取模式处理 (run_flag == 0)
+if run_flag == 0
+    if exist(result_file, 'file')
+        opts = detectImportOptions(result_file);
+        opts.VariableTypes{1} = 'string';
+        summary_table = readtable(result_file, opts);
+        print_summary_table(summary_table, Vehicle_num);
+        plot_summary_results(summary_table, plot_file, save_flag);
+    else
+        fprintf('当前配置的结果文件不存在，请先将 run_flag 设为 1 并运行实验得到结果。\n');
+    end
+    return;
+end
+
 
 %% 2. 加载数据集与截断处理
 if ~exist(data_file, 'file')
@@ -30,11 +56,12 @@ fprintf('数据集加载成功！开始对照实验...\n');
 
 % 根据截取比例计算实际运行步数
 N_steps_total = length(trajectories.V1.Time_true);
-N_steps = max(2, round(N_steps_total * data_ratio));
-dt_imu = trajectories.V1.Time_true(2) - trajectories.V1.Time_true(1);
+N_steps       = max(2, round(N_steps_total * data_ratio));
+dt_imu        = trajectories.V1.Time_true(2) - trajectories.V1.Time_true(1);
 
 fprintf('>> 实验设定数据截取比例: %.1f%%\n', data_ratio * 100);
 fprintf('>> 实际运行步数 / 总步数: %d / %d 步\n\n', N_steps, N_steps_total);
+
 
 %% 3. 初始化通用状态与真值提取
 p0 = zeros(3 * Vehicle_num, 1);
@@ -46,7 +73,7 @@ true_p_all = zeros(N_steps, 3, Vehicle_num);
 true_v_all = zeros(N_steps, 3, Vehicle_num);
 
 for i = 1:Vehicle_num
-    v_name = sprintf('V%d', i);
+    v_name          = sprintf('V%d', i);
     p0(3*i-2 : 3*i) = [trajectories.(v_name).X_true(1); trajectories.(v_name).Y_true(1); trajectories.(v_name).Z_true(1)];
     v0(3*i-2 : 3*i) = [trajectories.(v_name).Vx_true(1); trajectories.(v_name).Vy_true(1); trajectories.(v_name).Vz_true(1)];
     R0(:, :, i)     = trajectories.(v_name).R_true(:, :, 1); % 不加姿态扰动，使用真值
@@ -58,8 +85,8 @@ end
 
 % 存储最终比对结果的容器 [Mean_Pos_RMSE, Mean_Vel_RMSE, Mean_Att_RMSE]
 % 第一行存 CMLKF, 后续存不同 K 下的 DMLKF
-
 results_summary = zeros(1 + length(K_test_list), 3); 
+
 
 %% ========================================================================
 %% 第一部分：运行集中式 CMLKF (绝对最优基准)
@@ -70,7 +97,7 @@ fprintf('====================================================\n');
 
 kf_cmlkf = CMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
 
-% 降低阻尼，快速查到CMLKF在当前数据集下最优的结果
+% 降低阻尼，快速查到 CMLKF 在当前数据集下最优的结果
 kf_cmlkf.beta_inv = 0.01;
 kf_cmlkf.max_iter = 30;
 
@@ -78,19 +105,20 @@ kf_cmlkf.max_iter = 30;
 est_p_cmlkf = zeros(N_steps, 3, Vehicle_num);
 est_v_cmlkf = zeros(N_steps, 3, Vehicle_num);
 est_R_cmlkf = zeros(3, 3, Vehicle_num, N_steps);
-for i=1:Vehicle_num
-    est_p_cmlkf(1,:,i)=p0(3*i-2:3*i)'; 
-    est_v_cmlkf(1,:,i)=v0(3*i-2:3*i)'; 
-    est_R_cmlkf(:,:,i,1)=R0(:,:,i); 
+for i = 1:Vehicle_num
+    est_p_cmlkf(1, :, i)    = p0(3*i-2:3*i)'; 
+    est_v_cmlkf(1, :, i)    = v0(3*i-2:3*i)'; 
+    est_R_cmlkf(:, :, i, 1) = R0(:, :, i); 
 end
 
-uwb_idx = 2; 
+uwb_idx      = 2; 
 UWB_Time_Vec = trajectories.V1.UWB_Anchor(:, 1);
 
 for k = 2:N_steps
-    acc_m = zeros(3, Vehicle_num); gyro_m = zeros(3, Vehicle_num);
+    acc_m  = zeros(3, Vehicle_num);
+    gyro_m = zeros(3, Vehicle_num);
     for i = 1:Vehicle_num
-        v_name = sprintf('V%d', i);
+        v_name       = sprintf('V%d', i);
         acc_m(:, i)  = trajectories.(v_name).IMU_acc_m(k-1, :)' - bias_comp_ratio * trajectories.(v_name).IMU_bias_a_true(k-1, :)';
         gyro_m(:, i) = trajectories.(v_name).IMU_gyro_m(k-1, :)' - bias_comp_ratio * trajectories.(v_name).IMU_bias_w_true(k-1, :)';
     end
@@ -98,9 +126,10 @@ for k = 2:N_steps
     
     curr_time = trajectories.V1.Time_true(k);
     if uwb_idx <= length(UWB_Time_Vec) && abs(curr_time - UWB_Time_Vec(uwb_idx)) < 1e-5
-        uwb_anc_raw = zeros(Vehicle_num, Anchor_num); uwb_rel_raw = zeros(Vehicle_num, Vehicle_num);
+        uwb_anc_raw = zeros(Vehicle_num, Anchor_num);
+        uwb_rel_raw = zeros(Vehicle_num, Vehicle_num);
         for i = 1:Vehicle_num
-            v_name = sprintf('V%d', i);
+            v_name            = sprintf('V%d', i);
             uwb_anc_raw(i, :) = trajectories.(v_name).UWB_Anchor(uwb_idx, 2:end);
             uwb_rel_raw(i, :) = trajectories.(v_name).UWB_Relative(uwb_idx, 2:end);
         end
@@ -108,17 +137,19 @@ for k = 2:N_steps
         kf_cmlkf.update(uwb_anc_raw, uwb_rel_raw);
         uwb_idx = uwb_idx + 1;
     end
-    for i=1:Vehicle_num
-        est_p_cmlkf(k,:,i)=kf_cmlkf.p(3*i-2:3*i)'; 
-        est_v_cmlkf(k,:,i)=kf_cmlkf.v(3*i-2:3*i)'; 
-        est_R_cmlkf(:,:,i,k)=kf_cmlkf.R(:,:,i); 
+    for i = 1:Vehicle_num
+        est_p_cmlkf(k, :, i)    = kf_cmlkf.p(3*i-2:3*i)'; 
+        est_v_cmlkf(k, :, i)    = kf_cmlkf.v(3*i-2:3*i)'; 
+        est_R_cmlkf(:, :, i, k) = kf_cmlkf.R(:, :, i); 
     end
 end
 
 % 结算 CMLKF RMSE
-[cmlkf_mean_p, cmlkf_mean_v, cmlkf_mean_att] = calc_mean_rmse(Vehicle_num, N_steps, est_p_cmlkf, est_v_cmlkf, est_R_cmlkf, true_p_all, true_v_all, trajectories);
+[cmlkf_mean_p, cmlkf_mean_v, cmlkf_mean_att] = calc_mean_rmse( ...
+    Vehicle_num, N_steps, est_p_cmlkf, est_v_cmlkf, est_R_cmlkf, true_p_all, true_v_all, trajectories);
 results_summary(1, :) = [cmlkf_mean_p, cmlkf_mean_v, cmlkf_mean_att];
-fprintf('-> CMLKF 运行完毕 | 平均位置RMSE: %.4f m | 速度: %.4f | 姿态: %.4f\n\n', cmlkf_mean_p, cmlkf_mean_v, cmlkf_mean_att);
+fprintf('-> CMLKF 运行完毕 | 平均位置RMSE: %.4f m | 速度: %.4f | 姿态: %.4f\n\n', ...
+    cmlkf_mean_p, cmlkf_mean_v, cmlkf_mean_att);
 
 
 %% ========================================================================
@@ -134,7 +165,7 @@ for test_idx = 1:length(K_test_list)
     % 生成车间掩码 (奇数前大后小分配法)
     V2V_Mask = generate_v2v_mask(Vehicle_num, K);
     
-    kf_dmlkf = DMLKF_V1(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
+    kf_dmlkf          = DMLKF_V1(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
     kf_dmlkf.beta_inv = 0.01;
     kf_dmlkf.max_iter = 30;
 
@@ -142,17 +173,18 @@ for test_idx = 1:length(K_test_list)
     est_p_dmlkf = zeros(N_steps, 3, Vehicle_num);
     est_v_dmlkf = zeros(N_steps, 3, Vehicle_num);
     est_R_dmlkf = zeros(3, 3, Vehicle_num, N_steps);
-    for i=1:Vehicle_num
-        est_p_dmlkf(1,:,i)=p0(3*i-2:3*i)'; 
-        est_v_dmlkf(1,:,i)=v0(3*i-2:3*i)'; 
-        est_R_dmlkf(:,:,i,1)=R0(:,:,i); 
+    for i = 1:Vehicle_num
+        est_p_dmlkf(1, :, i)    = p0(3*i-2:3*i)'; 
+        est_v_dmlkf(1, :, i)    = v0(3*i-2:3*i)'; 
+        est_R_dmlkf(:, :, i, 1) = R0(:, :, i); 
     end
 
     uwb_idx = 2; 
     for k = 2:N_steps
-        acc_m = zeros(3, Vehicle_num); gyro_m = zeros(3, Vehicle_num);
+        acc_m  = zeros(3, Vehicle_num);
+        gyro_m = zeros(3, Vehicle_num);
         for i = 1:Vehicle_num
-            v_name = sprintf('V%d', i);
+            v_name       = sprintf('V%d', i);
             acc_m(:, i)  = trajectories.(v_name).IMU_acc_m(k-1, :)' - bias_comp_ratio * trajectories.(v_name).IMU_bias_a_true(k-1, :)';
             gyro_m(:, i) = trajectories.(v_name).IMU_gyro_m(k-1, :)' - bias_comp_ratio * trajectories.(v_name).IMU_bias_w_true(k-1, :)';
         end
@@ -160,9 +192,10 @@ for test_idx = 1:length(K_test_list)
         
         curr_time = trajectories.V1.Time_true(k);
         if uwb_idx <= length(UWB_Time_Vec) && abs(curr_time - UWB_Time_Vec(uwb_idx)) < 1e-5
-            uwb_anc_raw = zeros(Vehicle_num, Anchor_num); uwb_rel_raw = zeros(Vehicle_num, Vehicle_num);
+            uwb_anc_raw = zeros(Vehicle_num, Anchor_num);
+            uwb_rel_raw = zeros(Vehicle_num, Vehicle_num);
             for i = 1:Vehicle_num
-                v_name = sprintf('V%d', i);
+                v_name            = sprintf('V%d', i);
                 uwb_anc_raw(i, :) = trajectories.(v_name).UWB_Anchor(uwb_idx, 2:end);
                 uwb_rel_raw(i, :) = trajectories.(v_name).UWB_Relative(uwb_idx, 2:end);
             end
@@ -175,39 +208,143 @@ for test_idx = 1:length(K_test_list)
             uwb_idx = uwb_idx + 1;
         end
         
-        for i=1:Vehicle_num
-            est_p_dmlkf(k,:,i)=kf_dmlkf.Nodes{i}.p'; 
-            est_v_dmlkf(k,:,i)=kf_dmlkf.Nodes{i}.v'; 
-            est_R_dmlkf(:,:,i,k)=kf_dmlkf.Nodes{i}.R; 
+        for i = 1:Vehicle_num
+            est_p_dmlkf(k, :, i)    = kf_dmlkf.Nodes{i}.p'; 
+            est_v_dmlkf(k, :, i)    = kf_dmlkf.Nodes{i}.v'; 
+            est_R_dmlkf(:, :, i, k) = kf_dmlkf.Nodes{i}.R; 
         end
     end
     
     % 结算当前 K 下的 RMSE
-    [mean_p, mean_v, mean_att] = calc_mean_rmse(Vehicle_num, N_steps, est_p_dmlkf, est_v_dmlkf, est_R_dmlkf, true_p_all, true_v_all, trajectories);
+    [mean_p, mean_v, mean_att] = calc_mean_rmse( ...
+        Vehicle_num, N_steps, est_p_dmlkf, est_v_dmlkf, est_R_dmlkf, true_p_all, true_v_all, trajectories);
     results_summary(1 + test_idx, :) = [mean_p, mean_v, mean_att];
-    fprintf('-> DMLKF (K=%d) 运行完毕 | 平均位置RMSE: %.4f m | 速度: %.4f | 姿态: %.4f\n\n', K, mean_p, mean_v, mean_att);
+    fprintf('-> DMLKF (K=%d) 运行完毕 | 平均位置RMSE: %.4f m | 速度: %.4f | 姿态: %.4f\n\n', ...
+        K, mean_p, mean_v, mean_att);
 end
 
 
 %% ========================================================================
-%% 第三部分：输出最终比对汇总表
+%% 第三部分：构造汇总表、保存、打印与绘图
 %% ========================================================================
-fprintf('\n');
-fprintf('===================================================================\n');
-fprintf('                     CMLKF vs DMLKF 最终对比总结表                 \n');
-fprintf('===================================================================\n');
-fprintf(' Method    | Neighbors (K) |  Pos RMSE (m) | Vel RMSE (m/s) | Att RMSE (deg)\n');
-fprintf('-------------------------------------------------------------------\n');
-fprintf(' CMLKF     | Full (%d)      |   %10.4f  |   %10.4f   |   %10.4f\n', (Vehicle_num - 1), results_summary(1,1), results_summary(1,2), results_summary(1,3));
-fprintf('-------------------------------------------------------------------\n');
-for idx = 1:length(K_test_list)
-    fprintf(' DMLKF     | %-13d |   %10.4f  |   %10.4f   |   %10.4f\n', ...
-        K_test_list(idx), results_summary(1+idx, 1), results_summary(1+idx, 2), results_summary(1+idx, 3));
+method_col    = ["CMLKF"; repmat("DMLKF", length(K_test_list), 1)];
+neighbors_col = [(Vehicle_num - 1); K_test_list(:)];
+
+summary_table = table( ...
+    method_col, ...
+    neighbors_col, ...
+    results_summary(:, 1), ...
+    results_summary(:, 2), ...
+    results_summary(:, 3), ...
+    'VariableNames', {'Method', 'Neighbors_K', 'Pos_RMSE', 'Vel_RMSE', 'Att_RMSE'});
+
+% 按需保存 CSV 结果文件
+if save_flag
+    if ~exist(result_dir, 'dir')
+        mkdir(result_dir);
+    end
+    writetable(summary_table, result_file);
+    fprintf('---> 汇总结果表已保存至:\n%s\n', result_file);
 end
-fprintf('===================================================================\n\n');
+
+% 打印最终比对汇总表
+print_summary_table(summary_table, Vehicle_num);
+
+% 绘制对比曲线并按需保存 PNG 图片
+plot_summary_results(summary_table, plot_file, save_flag);
 
 
-%% ==== 局部辅助函数：生成奇数前大后小的 V2V Mask ====
+%% ======================= 局部辅助函数区域 =======================
+
+% -------------------------------------------------------------------------
+% 函数: print_summary_table
+% 功能: 打印 CMLKF vs DMLKF 最终对比总结表 (保持原有打印格式不变)
+% -------------------------------------------------------------------------
+function print_summary_table(T, Vehicle_num)
+    cmlkf_row  = find(string(T.Method) == "CMLKF", 1);
+    dmlkf_rows = find(string(T.Method) == "DMLKF");
+
+    fprintf('\n');
+    fprintf('===================================================================\n');
+    fprintf('                     CMLKF vs DMLKF 最终对比总结表                 \n');
+    fprintf('===================================================================\n');
+    fprintf(' Method    | Neighbors (K) |  Pos RMSE (m) | Vel RMSE (m/s) | Att RMSE (deg)\n');
+    fprintf('-------------------------------------------------------------------\n');
+    if ~isempty(cmlkf_row)
+        fprintf(' CMLKF     | Full (%d)      |   %10.4f  |   %10.4f   |   %10.4f\n', ...
+            (Vehicle_num - 1), T.Pos_RMSE(cmlkf_row), T.Vel_RMSE(cmlkf_row), T.Att_RMSE(cmlkf_row));
+    end
+    fprintf('-------------------------------------------------------------------\n');
+    for i = 1:length(dmlkf_rows)
+        r = dmlkf_rows(i);
+        fprintf(' DMLKF     | %-13d |   %10.4f  |   %10.4f   |   %10.4f\n', ...
+            T.Neighbors_K(r), T.Pos_RMSE(r), T.Vel_RMSE(r), T.Att_RMSE(r));
+    end
+    fprintf('===================================================================\n\n');
+end
+
+% -------------------------------------------------------------------------
+% 函数: plot_summary_results
+% 功能: 绘制 DMLKF_V1 与 CMLKF 的位置 RMSE 随邻居数变化曲线并按需保存 PNG
+% -------------------------------------------------------------------------
+function plot_summary_results(T, plot_file, do_save)
+    cmlkf_row = find(string(T.Method) == "CMLKF", 1);
+    dmlkf_T   = T(string(T.Method) == "DMLKF", :);
+    dmlkf_T   = sortrows(dmlkf_T, 'Neighbors_K');
+
+    fig = figure('Name', 'DMLKF_V1 VS CMLKF', 'Color', 'w');
+    hold on; grid on; box on;
+
+    % 绘制 DMLKF_V1 曲线
+    plot(dmlkf_T.Neighbors_K, dmlkf_T.Pos_RMSE, 'o-', 'LineWidth', 1.8, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'w', ...
+        'Color', [0.85 0.20 0.15], 'DisplayName', 'DMLKF_V1');
+
+    % 绘制 CMLKF 基准水平线
+    if ~isempty(cmlkf_row)
+        cmlkf_rmse = T.Pos_RMSE(cmlkf_row);
+        yline(cmlkf_rmse, '--', 'LineWidth', 1.6, ...
+            'Color', [0.10 0.35 0.80], ...
+            'Label', sprintf('CMLKF: %.4f', cmlkf_rmse), ...
+            'LabelHorizontalAlignment', 'left', ...
+            'LabelVerticalAlignment', 'bottom', ...
+            'DisplayName', 'CMLKF');
+    end
+
+    % 标注 DMLKF_V1 各点具体数值
+    for q = 1:height(dmlkf_T)
+        text(dmlkf_T.Neighbors_K(q), dmlkf_T.Pos_RMSE(q), ...
+            sprintf('  %.4f', dmlkf_T.Pos_RMSE(q)), ...
+            'FontSize', 8, 'VerticalAlignment', 'bottom', ...
+            'Interpreter', 'none');
+    end
+
+    % 坐标轴、标题与图例配置
+    xticks(dmlkf_T.Neighbors_K);
+    if height(dmlkf_T) > 1
+        xlim([min(dmlkf_T.Neighbors_K) - 0.5, max(dmlkf_T.Neighbors_K) + 0.5]);
+    end
+    ytickformat('%.4f');
+    xlabel('DMLKF_V1 neighbor', 'Interpreter', 'none');
+    ylabel('RMSE');
+    title('DMLKF_V1 VS CMLKF', 'Interpreter', 'none');
+    legend('Location', 'northeast', 'Interpreter', 'none');
+
+    % 按需保存 PNG 图片
+    if do_save
+        plot_dir = fileparts(plot_file);
+        if ~exist(plot_dir, 'dir')
+            mkdir(plot_dir);
+        end
+        exportgraphics(fig, plot_file, 'Resolution', 150);
+        fprintf('---> 对比曲线图片已保存至:\n%s\n', plot_file);
+    end
+end
+
+% -------------------------------------------------------------------------
+% 函数: generate_v2v_mask
+% 功能: 生成奇数前大后小的 V2V Mask
+% -------------------------------------------------------------------------
 function V2V_Mask = generate_v2v_mask(V_num, K)
     V2V_Mask = zeros(V_num, V_num);
     K_fwd = ceil(K / 2);  % 前面(序号变大方向)分大头
@@ -225,10 +362,13 @@ function V2V_Mask = generate_v2v_mask(V_num, K)
     V2V_Mask(logical(eye(V_num))) = 0; % 自身置0
 end
 
-%% ==== 局部辅助函数：统一结算全局平均 RMSE ====
+% -------------------------------------------------------------------------
+% 函数: calc_mean_rmse
+% 功能: 统一结算全局平均 RMSE
+% -------------------------------------------------------------------------
 function [mean_p, mean_v, mean_att] = calc_mean_rmse(V_num, N_steps, est_p, est_v, est_R, true_p, true_v, trajectories)
-    rmse_p = zeros(V_num, 1);
-    rmse_v = zeros(V_num, 1);
+    rmse_p   = zeros(V_num, 1);
+    rmse_v   = zeros(V_num, 1);
     rmse_att = zeros(V_num, 1);
     
     for i = 1:V_num
@@ -247,7 +387,7 @@ function [mean_p, mean_v, mean_att] = calc_mean_rmse(V_num, N_steps, est_p, est_
         end
         rmse_att(i) = sqrt(mean(err_att_seq.^2));
     end
-    mean_p = mean(rmse_p);
-    mean_v = mean(rmse_v);
+    mean_p   = mean(rmse_p);
+    mean_v   = mean(rmse_v);
     mean_att = mean(rmse_att);
 end
