@@ -18,7 +18,7 @@ data_ratio  = 1;
 
 % 路径配置
 % data_dir = 'E:\DMLKF_code\Data';
-data_dir = 'E:\DMLKF_code\TEST\GN_compare\Data';
+data_dir = 'E:\DMLKF_code\TEST\C_compare\V1_CMLKF\Data';
 data_file = fullfile(data_dir, sprintf('Trj_Veh%d_Anc%d_pure.mat', Vehicle_num, Anchor_num));
 
 %% 2. 加载数据集与截断处理

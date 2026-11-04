@@ -1,7 +1,7 @@
 % =========================================================================
 % 脚本名称: compare_CEKF_CMLKF_CIEKF.m
 % 功能描述: 在同一多批次数据集上比较 CEKF、CMLKF 和 CIEKF 在不同基站数量下的位置 RMSE
-%           (采用单车 RMSE 算术平均逻辑，最终汇总并保存各基站数下的全网平均 RMSE)
+%           (采用单车 RMSE 算术平均逻辑，最终汇总、保存并绘制各基站数下的全网平均 RMSE)
 % =========================================================================
 clc; clear; close all;
 
@@ -11,8 +11,8 @@ Anchor_num      = 12;
 Anchor_data_num = 4:12;  % 测试使用的基站数量，可以是标量(如10)或向量(如4:12)
 dataset_id      = 'CEKF_CMLKF_CIEKF_30_5'; 
 
-save_flag       = 1;  % 是否保存各基站数下平均位置 RMSE 汇总表至 CSV
-run_flag        = 0;     % 1: 运行实验; 0: 仅读取并打印已有结果
+save_flag       = 1;     % 1: 保存汇总表(CSV)与对比图(PNG); 0: 不保存
+run_flag        = 0;     % 1: 运行实验; 0: 仅读取已有结果并打印、绘图
 
 % --- 算法端与滤波器相关参数 ---
 bias_comp_ratio    = 1;   % 1.0 表示完全补偿 IMU 零偏
@@ -49,17 +49,20 @@ addpath(fullfile(repo_root, 'EKF', 'CEKF'));
 addpath(fullfile(repo_root, 'MLKF', 'CMLKF'));
 addpath(fullfile(repo_root, 'IEKF', 'CIEKF')); 
 
-% 按照要求格式命名数据与结果文件 (开始基站数 - 结束基站数)
+% 按照要求格式命名数据、CSV 结果与 PNG 图片文件 (开始基站数 - 结束基站数)
 data_file   = fullfile(data_dir, sprintf( ...
     'Trj_Veh%d_Anc%d_%s.mat', Vehicle_num, Anchor_num, dataset_id));
 result_file = fullfile(result_dir, sprintf( ...
     '%s_Veh%d_Anc%d-%d.csv', dataset_id, Vehicle_num, min(Anchor_data_num), max(Anchor_data_num)));
+plot_file   = fullfile(result_dir, sprintf( ...
+    '%s_Veh%d_Anc%d-%d.png', dataset_id, Vehicle_num, min(Anchor_data_num), max(Anchor_data_num)));
 
 % 仅读取模式处理 (run_flag == 0)
 if run_flag == 0
     if exist(result_file, 'file')
         summary_table = readtable(result_file);
         print_summary_table(summary_table, Vehicle_num, dataset_id);
+        plot_summary_results(summary_table, plot_file, save_flag);
     else
         fprintf('当前数据集结果不存在，请先将 run_flag 设为 1 并运行实验得到结果。\n');
     end
@@ -168,7 +171,7 @@ for anc_idx = 1:num_anc_tests
 end
 
 
-%% ==================== 5. 数据保存与汇总输出 ====================
+%% ==================== 5. 数据保存、汇总输出与可视化 ====================
 summary_table = struct2table(summary_metrics);
 
 % 保存最终的汇总 CSV
@@ -182,6 +185,9 @@ end
 
 % 打印全部基站跑完后的汇总对比表
 print_summary_table(summary_table, Vehicle_num, dataset_id);
+
+% 绘制对比曲线并根据 save_flag 保存 PNG 图片
+plot_summary_results(summary_table, plot_file, save_flag);
 
 
 %% ======================= 局部函数区域 =======================
@@ -351,4 +357,49 @@ function print_summary_table(T, Vehicle_num, dataset_id)
             T.Anchor_Count(i), T.CEKF(i), T.CMLKF(i), T.CIEKF(i));
     end
     fprintf('====================================================================================\n\n');
+end
+
+% -------------------------------------------------------------------------
+% 函数: plot_summary_results
+% 功能: 绘制 CEKF、CMLKF、CIEKF 的 RMSE 随基站数量变化的曲线，并按需保存 PNG
+% -------------------------------------------------------------------------
+function plot_summary_results(T, plot_file, do_save)
+    T = sortrows(T, 'Anchor_Count');
+
+    fig = figure('Name', 'RMSE vs. Anchor Number', 'Color', 'w');
+    hold on; grid on; box on;
+
+    % 绘制三条算法曲线
+    plot(T.Anchor_Count, T.CEKF, 's-', 'LineWidth', 1.8, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'w', ...
+        'Color', [0.10 0.35 0.80], 'DisplayName', 'CEKF');
+
+    plot(T.Anchor_Count, T.CMLKF, 'o-', 'LineWidth', 1.8, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'w', ...
+        'Color', [0.85 0.20 0.15], 'DisplayName', 'CMLKF');
+
+    plot(T.Anchor_Count, T.CIEKF, '^-', 'LineWidth', 1.8, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'w', ...
+        'Color', [0.15 0.65 0.30], 'DisplayName', 'CIEKF');
+
+    % 坐标轴、标题与图例配置
+    xticks(T.Anchor_Count);
+    if height(T) > 1
+        xlim([min(T.Anchor_Count) - 0.5, max(T.Anchor_Count) + 0.5]);
+    end
+    ytickformat('%.4f');
+    xlabel('Anchor Number');
+    ylabel('RMSE');
+    title('');
+    legend('Location', 'northeast');
+
+    % 按需保存 PNG 图片
+    if do_save
+        plot_dir = fileparts(plot_file);
+        if ~exist(plot_dir, 'dir')
+            mkdir(plot_dir);
+        end
+        exportgraphics(fig, plot_file, 'Resolution', 150);
+        fprintf('---> 对比曲线图片已成功保存至:\n%s\n', plot_file);
+    end
 end
