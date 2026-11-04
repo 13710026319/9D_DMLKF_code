@@ -1,22 +1,60 @@
+% =========================================================================
+% 脚本功能: 分布式牛顿 (DMLKF) 与集中式牛顿 (V1) 随最大迭代次数变化的性能对比
+% =========================================================================
 clc; clear; close all;
 
-%% Parameters
-Vehicle_num = 8;
-Anchor_num  = 4;
-neighbor_k  = 7;
+%% ==================== 1. 实验与算法参数配置 ====================
+% --- 1.1 场景规模与拓扑参数 ---
+Vehicle_num = 8;                        % 协同车辆总数
+Anchor_num  = 4;                        % UWB 基站总数
+neighbor_k  = 7;                        % 车间通信拓扑邻居数
 
+% --- 1.2 数据集与截取比例配置 ---
 dataset_name    = 'Trj_Veh8_Anc4_pure.mat';
-bias_comp_ratio = 1;
-data_ratio      = 0.2;
+bias_comp_ratio = 1;                    % IMU 零偏补偿比例
+data_ratio      = 0.2;                  % 数据截取比例
 
-initial_position_std_xy  = 2;
-initial_position_std_z   = 1.5;
+% --- 1.3 初始状态先验标准差与固定初始误差模式 ---
+initial_position_std_xy  = 1;
+initial_position_std_z   = 0.6;
 initial_velocity_std     = 0.1;
 initial_attitude_std_deg = 1;
 
-run_flag  = 1;
-save_flag = 1;
+% 固定初始位置误差模式，按 XY/Z 先验标准差缩放
+initial_error_pattern = [
+     1.44  0.96  0.60  0.36 -0.36 -0.60 -0.96 -1.44;
+     0.60 -1.44  0.96 -0.36  0.36 -0.96  1.44 -0.60;
+     0.96  1.44 -0.36 -0.60  0.60  0.36 -1.44 -0.96
+];
+initial_position_std_vec = [initial_position_std_xy; ...
+    initial_position_std_xy; initial_position_std_z];
+initial_position_error   = initial_position_std_vec .* initial_error_pattern;
 
+% --- 1.4 运行与保存控制标志 ---
+run_flag  = 0;                          % 1: 运行实验; 0: 仅读取并绘图
+save_flag = 1;                          % 1: 保存 CSV 与图片; 0: 不保存
+
+% --- 1.5 迭代次数与优化超参数配置 ---
+V1_max_iter       = 30;
+DMLKF_iter_groups = {
+    [1 3 5 7 10], ...
+    [20 15], ...
+    [25], ...
+    [30], ...
+    [35]
+};
+
+V1_beta_inv        = 0.2;
+V1_max_step        = Inf;
+DMLKF_beta_inv     = 0.2;
+DMLKF_max_step     = Inf;
+DMLKF_ALPHA_SAFETY = 1;
+DMLKF_epsilon      = 1e-4;
+
+max_wait_hours     = 6;                 % 并行任务最大等待时间 (小时)
+
+
+%% ==================== 2. 路径配置与读取模式处理 ====================
 test_dir    = fileparts(mfilename('fullpath'));
 case_dir    = fileparts(test_dir);
 data_dir    = fullfile(case_dir, 'Data');
@@ -27,30 +65,11 @@ result_file = fullfile(result_dir, ...
 plot_file   = fullfile(result_dir, ...
     sprintf('iter_%dV_%dA_.png', Vehicle_num, Anchor_num));
 
-V1_max_iter = 30;
-DMLKF_iter_groups = {
-    [1 3 5 7], ...
-    [10 15], ...
-    [20 25], ...
-    [30 35], ...
-    [50]
-};
-
-V1_beta_inv       = 0.01;
-V1_max_step       = Inf;
-DMLKF_beta_inv     = 0.2;
-DMLKF_max_step     = Inf;
-DMLKF_ALPHA_SAFETY = 1;
-DMLKF_epsilon      = 1e-4;
-
-max_wait_hours = 6;
-
-initial_position_std_vec = [initial_position_std_xy; ...
-    initial_position_std_xy; initial_position_std_z];
-
+% 校验并整理迭代次数列表
 [all_dmlkf_iters, active_groups] = prepare_iterations( ...
     DMLKF_iter_groups, V1_max_iter);
 
+% 仅读取模式处理 (run_flag == 0)
 if run_flag == 0
     if exist(result_file, 'file')
         T = readtable(result_file, 'VariableNamingRule', 'preserve', ...
@@ -68,36 +87,43 @@ if ~isfile(data_file)
     error('找不到数据集: %s', data_file);
 end
 
-initial_position_error = initial_position_std_vec .* randn(3, Vehicle_num);
 
+%% ==================== 3. 并行任务配置与启动 ====================
+% --- 3.1 组装传递给 Worker 的配置结构体 ---
 cfg = struct();
-cfg.data_file          = data_file;
-cfg.Vehicle_num        = Vehicle_num;
-cfg.Anchor_num         = Anchor_num;
-cfg.neighbor_k         = neighbor_k;
-cfg.bias_comp_ratio    = bias_comp_ratio;
-cfg.data_ratio         = data_ratio;
-cfg.initial_position_error      = initial_position_error;
-cfg.initial_position_std_vec    = initial_position_std_vec;
-cfg.initial_velocity_std        = initial_velocity_std;
-cfg.initial_attitude_std_deg    = initial_attitude_std_deg;
-cfg.V1_max_iter        = V1_max_iter;
-cfg.V1_beta_inv        = V1_beta_inv;
-cfg.V1_max_step        = V1_max_step;
-cfg.DMLKF_beta_inv     = DMLKF_beta_inv;
-cfg.DMLKF_max_step     = DMLKF_max_step;
-cfg.DMLKF_ALPHA_SAFETY = DMLKF_ALPHA_SAFETY;
-cfg.DMLKF_epsilon      = DMLKF_epsilon;
+cfg.data_file                = data_file;
+cfg.Vehicle_num              = Vehicle_num;
+cfg.Anchor_num               = Anchor_num;
+cfg.neighbor_k               = neighbor_k;
+cfg.bias_comp_ratio          = bias_comp_ratio;
+cfg.data_ratio               = data_ratio;
+cfg.initial_position_error   = initial_position_error;
+cfg.initial_position_std_vec = initial_position_std_vec;
+cfg.initial_velocity_std     = initial_velocity_std;
+cfg.initial_attitude_std_deg = initial_attitude_std_deg;
+cfg.V1_max_iter              = V1_max_iter;
+cfg.V1_beta_inv              = V1_beta_inv;
+cfg.V1_max_step              = V1_max_step;
+cfg.DMLKF_beta_inv           = DMLKF_beta_inv;
+cfg.DMLKF_max_step           = DMLKF_max_step;
+cfg.DMLKF_ALPHA_SAFETY       = DMLKF_ALPHA_SAFETY;
+cfg.DMLKF_epsilon            = DMLKF_epsilon;
 
-%% Parallel jobs
+% --- 3.2 生成临时目录与配置文件 ---
 % 临时文件生成（需要运行并行任务时取消以下注释）
-% tmp_dir = fullfile(test_dir, ...
-%     ['newton_iter_tmp_' char(datetime('now', 'Format', 'yyyyMMdd_HHmmssSSS'))]);
-% mkdir(tmp_dir);
-%
-% cfg_file = fullfile(tmp_dir, 'config.mat');
-% save(cfg_file, 'cfg');
+tmp_dir = fullfile(test_dir, ...
+    ['newton_iter_tmp_' char(datetime('now', 'Format', 'yyyyMMdd_HHmmssSSS'))]);
+mkdir(tmp_dir);
 
+cfg_file = fullfile(tmp_dir, 'config.mat');
+save(cfg_file, 'cfg');
+
+if ~exist('tmp_dir', 'var') || ~exist('cfg_file', 'var')
+    error(['临时文件生成当前已注释，无法启动并行任务。' ...
+        '请先取消 %% Parallel jobs 下的临时文件生成注释。']);
+end
+
+% --- 3.3 构建并行任务队列 ---
 jobs = struct('mode', {}, 'iters', {}, 'tag', {});
 jobs(end+1) = struct('mode', 'V1', 'iters', V1_max_iter, 'tag', 'V1');
 for q = 1:numel(active_groups)
@@ -115,6 +141,7 @@ fprintf('V1 max_iter: %d\n', V1_max_iter);
 fprintf('DMLKF max_iter: %s\n', mat2str(all_dmlkf_iters));
 fprintf('启动并行任务: %d\n', numel(jobs));
 
+% --- 3.4 启动后台进程并等待汇总结果 ---
 try
     for q = 1:numel(jobs)
         jobs(q).part_file = fullfile(tmp_dir, [jobs(q).tag '.csv']);
@@ -139,10 +166,14 @@ try
     wait_for_jobs(jobs, max_wait_hours);
     T = collect_results(jobs, all_dmlkf_iters, V1_max_iter);
 catch err
-    stop_workers(tmp_dir);
+    if exist('tmp_dir', 'var') && exist(tmp_dir, 'dir')
+        stop_workers(tmp_dir);
+    end
     rethrow(err);
 end
 
+
+%% ==================== 4. 结果打印、保存与可视化 ====================
 print_results(T);
 
 if save_flag
@@ -156,172 +187,209 @@ end
 plot_results(T, result_file, plot_file, neighbor_k, Vehicle_num, ...
     Anchor_num, data_ratio, save_flag);
 
-%% Local functions
+
+%% ======================= 局部函数区域 =======================
+
+% -------------------------------------------------------------------------
+% 函数: prepare_iterations
+% 功能: 校验并提取非空的 DMLKF 迭代次数分组及排序后的总列表
+% -------------------------------------------------------------------------
 function [all_iters, active_groups] = prepare_iterations(groups, v1_iter)
-if ~iscell(groups) || numel(groups) ~= 5
-    error('DMLKF_iter_groups 必须是包含 5 个列表的 cell 数组。');
-end
-if ~is_positive_integer(v1_iter)
-    error('V1_max_iter 必须是正整数。');
-end
-
-active_groups = {};
-for q = 1:numel(groups)
-    g = groups{q};
-    if isempty(g)
-        continue;
+    if ~iscell(groups) || numel(groups) ~= 5
+        error('DMLKF_iter_groups 必须是包含 5 个列表的 cell 数组。');
     end
-    if ~isnumeric(g) || ~isvector(g) || any(~isfinite(g)) || ...
-            any(g <= 0) || any(g ~= round(g))
-        error('DMLKF_iter_groups{%d} 必须是正整数向量或空数组。', q);
+    if ~is_positive_integer(v1_iter)
+        error('V1_max_iter 必须是正整数。');
     end
-    active_groups{end+1} = g(:)'; %#ok<AGROW>
+
+    active_groups = {};
+    for q = 1:numel(groups)
+        g = groups{q};
+        if isempty(g)
+            continue;
+        end
+        if ~isnumeric(g) || ~isvector(g) || any(~isfinite(g)) || ...
+                any(g <= 0) || any(g ~= round(g))
+            error('DMLKF_iter_groups{%d} 必须是正整数向量或空数组。', q);
+        end
+        active_groups{end+1} = g(:)'; %#ok<AGROW>
+    end
+
+    if isempty(active_groups)
+        error('至少需要一个非空的 DMLKF 迭代列表。');
+    end
+
+    all_iters = sort([active_groups{:}]);
+    if numel(all_iters) ~= numel(unique(all_iters))
+        error('DMLKF 迭代列表中不能出现重复的 max_iter。');
+    end
 end
 
-if isempty(active_groups)
-    error('至少需要一个非空的 DMLKF 迭代列表。');
-end
-
-all_iters = sort([active_groups{:}]);
-if numel(all_iters) ~= numel(unique(all_iters))
-    error('DMLKF 迭代列表中不能出现重复的 max_iter。');
-end
-end
-
+% -------------------------------------------------------------------------
+% 函数: is_positive_integer
+% 功能: 判断输入是否为有限正整数标量
+% -------------------------------------------------------------------------
 function tf = is_positive_integer(v)
-tf = isnumeric(v) && isscalar(v) && isfinite(v) && v > 0 && v == round(v);
+    tf = isnumeric(v) && isscalar(v) && isfinite(v) && v > 0 && v == round(v);
 end
 
+% -------------------------------------------------------------------------
+% 函数: quote_text
+% 功能: 为字符串添加单引号转义，用于构造命令行执行语句
+% -------------------------------------------------------------------------
 function s = quote_text(v)
-v = char(v);
-s = ['''' strrep(v, '''', '''''') ''''];
+    v = char(v);
+    s = ['''' strrep(v, '''', '''''') ''''];
 end
 
+% -------------------------------------------------------------------------
+% 函数: wait_for_jobs
+% 功能: 轮询等待所有后台 Worker 任务生成 .done 完成标记文件
+% -------------------------------------------------------------------------
 function wait_for_jobs(jobs, max_wait_hours)
-timer_id = tic;
-while true
-    done_count = 0;
+    timer_id = tic;
+    while true
+        done_count = 0;
+        for q = 1:numel(jobs)
+            if isfile(jobs(q).done_file)
+                done_count = done_count + 1;
+            end
+        end
+        if done_count == numel(jobs)
+            return;
+        end
+        if toc(timer_id) > max_wait_hours * 3600
+            error('等待并行任务超时，完成 %d/%d。', done_count, numel(jobs));
+        end
+        pause(5);
+    end
+end
+
+% -------------------------------------------------------------------------
+% 函数: collect_results
+% 功能: 收集并合并所有并行子任务的 CSV 结果，校验完整性并按迭代数排序
+% -------------------------------------------------------------------------
+function T = collect_results(jobs, expected_iters, v1_iter)
+    parts = table();
     for q = 1:numel(jobs)
-        if isfile(jobs(q).done_file)
-            done_count = done_count + 1;
+        if ~isfile(jobs(q).part_file)
+            error('并行任务未生成结果: %s', jobs(q).tag);
+        end
+        current = readtable(jobs(q).part_file, ...
+            'VariableNamingRule', 'preserve', 'TextType', 'string');
+        if isempty(parts)
+            parts = current;
+        else
+            parts = [parts; current]; %#ok<AGROW>
         end
     end
-    if done_count == numel(jobs)
+
+    failed = parts.ok ~= 1 | ~isfinite(parts.pos_rmse_m);
+    if any(failed)
+        fprintf('\n失败任务:\n');
+        disp(parts(failed, {'algorithm', 'max_iter', 'note'}));
+        error('存在未成功完成的滤波任务。');
+    end
+
+    v1_rows = find(parts.algorithm == "V1");
+    if numel(v1_rows) ~= 1 || parts.max_iter(v1_rows) ~= v1_iter
+        error('V1 结果缺失或不唯一。');
+    end
+
+    dml_rows  = parts.algorithm == "DMLKF";
+    dml_iters = sort(parts.max_iter(dml_rows));
+    if ~isequal(dml_iters(:)', expected_iters(:)')
+        error('DMLKF 结果数量与配置不一致。');
+    end
+
+    v1_rmse   = parts.pos_rmse_m(v1_rows);
+    dml_table = sortrows(parts(dml_rows, :), 'max_iter');
+
+    algorithm  = [string("V1"); dml_table.algorithm];
+    max_iter   = [parts.max_iter(v1_rows); dml_table.max_iter];
+    pos_rmse_m = [v1_rmse; dml_table.pos_rmse_m];
+
+    T = table(algorithm, max_iter, pos_rmse_m);
+end
+
+% -------------------------------------------------------------------------
+% 函数: print_results
+% 功能: 在命令行窗口打印汇总结果表
+% -------------------------------------------------------------------------
+function print_results(T)
+    fprintf('\n%-8s | %10s | %12s\n', ...
+        'algorithm', 'max_iter', 'RMSE(m)');
+    fprintf('%s\n', repmat('-', 1, 38));
+    for q = 1:height(T)
+        fprintf('%-8s | %10d | %12.4f\n', ...
+            T.algorithm(q), T.max_iter(q), T.pos_rmse_m(q));
+    end
+    fprintf('%s\n\n', repmat('-', 1, 38));
+end
+
+% -------------------------------------------------------------------------
+% 函数: plot_results
+% 功能: 绘制 RMSE 随迭代次数变化的对比曲线并导出图片
+% -------------------------------------------------------------------------
+function plot_results(T, result_file, plot_file, K, V_num, A_num, ...
+        data_ratio, do_save) %#ok<INUSL>
+    v1_row = find(T.algorithm == "V1", 1);
+    dml    = T(T.algorithm == "DMLKF", :);
+    dml    = sortrows(dml, 'max_iter');
+
+    fig = figure('Name', 'Newton iteration comparison', 'Color', 'w');
+    hold on; grid on; box on;
+    
+    % 绘制分布式牛顿 (DMLKF) 曲线
+    plot(dml.max_iter, dml.pos_rmse_m, 'o-', 'LineWidth', 1.8, ...
+        'MarkerSize', 7, 'MarkerFaceColor', 'w', ...
+        'Color', [0.85 0.20 0.15], 'DisplayName', 'Distributed Newton');
+
+    % 绘制集中式牛顿 (V1) 基准水平线
+    v1_rmse = T.pos_rmse_m(v1_row);
+    yline(v1_rmse, '--', 'LineWidth', 1.6, ...
+        'Color', [0.10 0.35 0.80], ...
+        'Label', sprintf('V1: %.4f', v1_rmse), ...
+        'LabelHorizontalAlignment', 'left', ...
+        'LabelVerticalAlignment', 'bottom', ...
+        'DisplayName', 'Centralized Newton');
+
+    % 标注各数据点具体数值
+    for q = 1:height(dml)
+        text(dml.max_iter(q), dml.pos_rmse_m(q), ...
+            sprintf('  %.4f', dml.pos_rmse_m(q)), ...
+            'FontSize', 8, 'VerticalAlignment', 'bottom', ...
+            'Interpreter', 'none');
+    end
+
+    % 坐标轴、标题与图例设置
+    set(gca, 'XScale', 'log');
+    xticks(dml.max_iter);
+    xticklabels(cellstr(string(dml.max_iter)));
+    xlim([min(dml.max_iter)/1.35, max(dml.max_iter)*1.45]);
+    ytickformat('%.4f');
+    xlabel('Iterations', 'Interpreter', 'none');
+    ylabel('RMSE');
+    title('');
+    legend('Location', 'northeast');
+
+    if do_save
+        exportgraphics(fig, plot_file, 'Resolution', 150);
+        fprintf('图片已保存: %s\n', plot_file);
+    end
+end
+
+% -------------------------------------------------------------------------
+% 函数: stop_workers
+% 功能: 捕获异常时强制终止残留的后台 MATLAB Worker 进程
+% -------------------------------------------------------------------------
+function stop_workers(tmp_dir)
+    if ~ispc
         return;
     end
-    if toc(timer_id) > max_wait_hours * 3600
-        error('等待并行任务超时，完成 %d/%d。', done_count, numel(jobs));
-    end
-    pause(5);
-end
-end
-
-function T = collect_results(jobs, expected_iters, v1_iter)
-parts = table();
-for q = 1:numel(jobs)
-    if ~isfile(jobs(q).part_file)
-        error('并行任务未生成结果: %s', jobs(q).tag);
-    end
-    current = readtable(jobs(q).part_file, ...
-        'VariableNamingRule', 'preserve', 'TextType', 'string');
-    if isempty(parts)
-        parts = current;
-    else
-        parts = [parts; current]; %#ok<AGROW>
-    end
-end
-
-failed = parts.ok ~= 1 | ~isfinite(parts.pos_rmse_m);
-if any(failed)
-    fprintf('\n失败任务:\n');
-    disp(parts(failed, {'algorithm', 'max_iter', 'note'}));
-    error('存在未成功完成的滤波任务。');
-end
-
-v1_rows = find(parts.algorithm == "V1");
-if numel(v1_rows) ~= 1 || parts.max_iter(v1_rows) ~= v1_iter
-    error('V1 结果缺失或不唯一。');
-end
-
-dml_rows = parts.algorithm == "DMLKF";
-dml_iters = sort(parts.max_iter(dml_rows));
-if ~isequal(dml_iters(:)', expected_iters(:)')
-    error('DMLKF 结果数量与配置不一致。');
-end
-
-v1_rmse = parts.pos_rmse_m(v1_rows);
-dml_table = sortrows(parts(dml_rows, :), 'max_iter');
-
-algorithm = [string("V1"); dml_table.algorithm];
-max_iter = [parts.max_iter(v1_rows); dml_table.max_iter];
-pos_rmse_m = [v1_rmse; dml_table.pos_rmse_m];
-
-T = table(algorithm, max_iter, pos_rmse_m);
-end
-
-function print_results(T)
-fprintf('\n%-8s | %10s | %12s\n', ...
-    'algorithm', 'max_iter', 'RMSE(m)');
-fprintf('%s\n', repmat('-', 1, 38));
-for q = 1:height(T)
-    fprintf('%-8s | %10d | %12.4f\n', ...
-        T.algorithm(q), T.max_iter(q), T.pos_rmse_m(q));
-end
-fprintf('%s\n\n', repmat('-', 1, 38));
-end
-
-function plot_results(T, result_file, plot_file, K, V_num, A_num, ...
-        data_ratio, do_save)
-v1_row = find(T.algorithm == "V1", 1);
-dml = T(T.algorithm == "DMLKF", :);
-dml = sortrows(dml, 'max_iter');
-
-fig = figure('Name', 'Newton iteration comparison', 'Color', 'w');
-hold on; grid on; box on;
-plot(dml.max_iter, dml.pos_rmse_m, 'o-', 'LineWidth', 1.8, ...
-    'MarkerSize', 7, 'MarkerFaceColor', 'w', ...
-    'Color', [0.85 0.20 0.15], 'DisplayName', 'DMLKF');
-
-v1_rmse = T.pos_rmse_m(v1_row);
-yline(v1_rmse, '--', 'LineWidth', 1.6, ...
-    'Color', [0.10 0.35 0.80], ...
-    'Label', sprintf('V1: %.4f', v1_rmse), ...
-    'LabelHorizontalAlignment', 'left', ...
-    'LabelVerticalAlignment', 'bottom', ...
-    'DisplayName', sprintf('V1 max_iter = %d', T.max_iter(v1_row)));
-
-for q = 1:height(dml)
-    text(dml.max_iter(q), dml.pos_rmse_m(q), ...
-        sprintf('  %.4f', dml.pos_rmse_m(q)), ...
-        'FontSize', 8, 'VerticalAlignment', 'bottom', ...
-        'Interpreter', 'none');
-end
-
-set(gca, 'XScale', 'log');
-xticks(dml.max_iter);
-xticklabels(cellstr(string(dml.max_iter)));
-xlim([min(dml.max_iter)/1.35, max(dml.max_iter)*1.45]);
-ytickformat('%.4f');
-xlabel('DMLKF max_iter', 'Interpreter', 'none');
-ylabel('Position RMSE (m)');
-title(sprintf(['Position RMSE vs. max_iter ' ...
-    '(K = %d, %d vehicles, %d anchors, %.0f%% data)'], ...
-    K, V_num, A_num, 100*data_ratio), 'Interpreter', 'none');
-legend('Location', 'southeast');
-
-if do_save
-    exportgraphics(fig, plot_file, 'Resolution', 150);
-    fprintf('图片已保存: %s\n', plot_file);
-end
-end
-
-function stop_workers(tmp_dir)
-if ~ispc
-    return;
-end
-cmd = sprintf(['powershell -NoProfile -Command "Get-CimInstance ' ...
-    'Win32_Process | Where-Object { $_.Name -like ''matlab*'' -and ' ...
-    '$_.CommandLine -like ''*%s*'' } | ForEach-Object { ' ...
-    'Stop-Process -Id $_.ProcessId -Force }"'], tmp_dir);
-system(cmd);
+    cmd = sprintf(['powershell -NoProfile -Command "Get-CimInstance ' ...
+        'Win32_Process | Where-Object { $_.Name -like ''matlab*'' -and ' ...
+        '$_.CommandLine -like ''*%s*'' } | ForEach-Object { ' ...
+        'Stop-Process -Id $_.ProcessId -Force }"'], tmp_dir);
+    system(cmd);
 end
