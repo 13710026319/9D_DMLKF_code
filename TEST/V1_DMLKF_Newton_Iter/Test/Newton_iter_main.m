@@ -61,9 +61,9 @@ data_dir    = fullfile(case_dir, 'Data');
 data_file   = fullfile(data_dir, dataset_name);
 result_dir  = fullfile(case_dir, 'Result');
 result_file = fullfile(result_dir, ...
-    sprintf('iter_%dV_%dA_.csv', Vehicle_num, Anchor_num));
+    sprintf('iter_%dV_%dA.csv', Vehicle_num, Anchor_num));
 plot_file   = fullfile(result_dir, ...
-    sprintf('iter_%dV_%dA_.png', Vehicle_num, Anchor_num));
+    sprintf('iter_%dV_%dA.png', Vehicle_num, Anchor_num));
 
 % 校验并整理迭代次数列表
 [all_dmlkf_iters, active_groups] = prepare_iterations( ...
