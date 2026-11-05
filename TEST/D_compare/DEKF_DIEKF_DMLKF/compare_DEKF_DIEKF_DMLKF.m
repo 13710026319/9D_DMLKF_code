@@ -30,9 +30,9 @@ DMLKF_max_iter     = 1;                % DMLKF 最大迭代次数
 DMLKF_beta_inv     = 70;                % DMLKF 正则化步长参数
 DMLKF_print_flag   = 0;                 % DMLKF 调试信息打印开关
 
-DIEKF_ADMM_iter    = 10;               % DIEKF_ADMM 外层 ADMM 迭代次数
+DIEKF_ADMM_iter    = 40;               % DIEKF_ADMM 外层 ADMM 迭代次数
 DIEKF_ADMM_GN_iter = 3;                % DIEKF_ADMM 内层高斯牛顿迭代次数
-DIEKF_ADMM_rho     = 0.1;                % DIEKF_ADMM 惩罚参数
+DIEKF_ADMM_rho     = 0.5;                % DIEKF_ADMM 惩罚参数
 
 
 %% 2. 路径配置与数据集加载
