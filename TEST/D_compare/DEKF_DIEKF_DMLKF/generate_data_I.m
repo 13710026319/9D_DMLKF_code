@@ -1,9 +1,7 @@
 % =========================================================================
-% 脚本名称: generate_data_DEKF_DMLKF.m
+% 脚本名称: generate_data_I.m
 % 功能描述: 用于 DEKF/DIEKF/DMLKF 参数对比实验的独立数据生成器。
-%           本文件整合了 Data/generate_data_3D.m 与 Data/env_setup.m，
-%           轨迹与 Data/env_setup.m 完全一致，基站池从 10 个扩展至 15 个，
-%           运行时无需依赖外部 Data/ 目录。
+%           生成蜂窝型轨迹, 轨迹高度变化差异明显, 非线性等级较低(I级)
 % =========================================================================
 clc; clear; close all;
 
@@ -25,12 +23,12 @@ Vehicle_num   = 8;                              % 车辆总数
 Anchor_num    = 4;                              % 启用的 UWB 基站数量
 t_end         = 15;                             % 单批次仿真时长 (s)
 N_steps       = round(t_end / dt_imu) + 1;      % 单批次 IMU 总步数
-repeat_time   = 8;                              % 独立重复批次数量
+repeat_time   = 1;                              % 独立重复批次数量
 N_steps_total = N_steps * repeat_time;          % 所有批次拼接后的总步数
 
 % 1.3 数据集标识配置
 % 相同的 dataset_id 会直接覆盖同名 MAT 文件，但数据是不一样的
-dataset_id = 'DEKF_DIEKF_DMLKF_15_8';
+dataset_id = 'DEKF_DIEKF_DMLKF_15_II';
 
 if repeat_time < 1 || round(repeat_time) ~= repeat_time
     error('repeat_time must be a positive integer.');
@@ -47,6 +45,9 @@ base_seed = double(rng_state.Seed);
 % 2.2 UWB 测距噪声标准差 (m)
 UWB_noise_params.sigma_anc = 0.1;               % 车-基站 (V2A) 测距噪声
 UWB_noise_params.sigma_rel = 0.1;               % 车-车 (V2V) 相对测距噪声
+
+% UWB_noise_params.sigma_anc = 0;               % 车-基站 (V2A) 测距噪声
+% UWB_noise_params.sigma_rel = 0;               % 车-车 (V2V) 相对测距噪声
 
 % 2.3 IMU 测量噪声与零偏随机游走标准差
 IMU_noise_params.sigma_na = 0.05;               % 加速度计测量白噪声

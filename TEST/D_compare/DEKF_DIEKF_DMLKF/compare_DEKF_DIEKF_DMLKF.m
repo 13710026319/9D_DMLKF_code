@@ -18,12 +18,12 @@ bias_comp_ratio = 1;                    % IMU 零偏补偿比例
 data_ratio      = 1;                  % 每个批次的数据截取比例
 
 % 1.3 数据集与运行控制标志
-dataset_id = 'DEKF_DIEKF_DMLKF_15_8';  % 数据集标识
-save_flag  = 0;                         % 是否保存实验结果至 CSV
-run_flag   = 0;                         % 1: 运行实验; 0: 仅读取并打印已有结果
+dataset_id = 'DEKF_DIEKF_DMLKF_15_1';  % 数据集标识
+save_flag  = 1;                         % 是否保存实验结果至 CSV
+run_flag   = 1;                         % 1: 运行实验; 0: 仅读取并打印已有结果
 
 % 1.4 算法超参数与迭代配置
-DIEKF_max_iter     = 2;                % DIEKF 本地高斯牛顿最大迭代次数
+DIEKF_max_iter     = 3;                % DIEKF 本地高斯牛顿最大迭代次数
 
 DMLKF_max_iter     = 10;                % DMLKF 最大迭代次数
 DMLKF_beta_inv     = 70;                % DMLKF 正则化步长参数
@@ -31,7 +31,7 @@ DMLKF_print_flag   = 0;                 % DMLKF 调试信息打印开关
 
 DIEKF_ADMM_iter    = 10;               % DIEKF_ADMM 外层 ADMM 迭代次数
 DIEKF_ADMM_GN_iter = 3;                % DIEKF_ADMM 内层高斯牛顿迭代次数
-DIEKF_ADMM_rho     = 50;                % DIEKF_ADMM 惩罚参数
+DIEKF_ADMM_rho     = 1.2;                % DIEKF_ADMM 惩罚参数
 
 
 %% 2. 路径配置与数据集加载

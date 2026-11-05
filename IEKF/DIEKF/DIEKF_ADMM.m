@@ -228,7 +228,9 @@ classdef DIEKF_ADMM < handle
                 dim_i    = 9 * Ui_len;
                 
                 Sigma_prior_joint = obj.Nodes{i}.SigmaJ;
-                Sigma_prior_joint = (Sigma_prior_joint + Sigma_prior_joint') / 2 + 1e-12 * eye(dim_i);
+                Sigma_prior_joint = (Sigma_prior_joint + Sigma_prior_joint') / 2;
+                reg_prior = max(1e-6, 1e-7 * (trace(Sigma_prior_joint) / dim_i));
+                Sigma_prior_joint = Sigma_prior_joint + reg_prior * eye(dim_i);
                 G_bar = eye(dim_i) / Sigma_prior_joint;
                 G_bar = (G_bar + G_bar') / 2;
                 Gamma_prior_bar{i} = G_bar;
@@ -406,7 +408,8 @@ classdef DIEKF_ADMM < handle
                 [~, Omega_GN_final] = obj.eval_local_gn(i, s_final, Ui_nodes, p_prior, uwb_anc, uwb_rel);
                 
                 Gamma_post = Gamma_prior_bar{i} + Pi_mat' * Omega_GN_final * Pi_mat;
-                Gamma_post = (Gamma_post + Gamma_post') / 2 + 1e-10 * eye(dim_i);
+                reg_post = max(1e-6, 1e-7 * (trace(Gamma_post) / dim_i));
+                Gamma_post = (Gamma_post + Gamma_post') / 2 + reg_post * eye(dim_i);
                 
                 SigmaJ_post = eye(dim_i) / Gamma_post;
                 SigmaJ_post = (SigmaJ_post + SigmaJ_post') / 2;
