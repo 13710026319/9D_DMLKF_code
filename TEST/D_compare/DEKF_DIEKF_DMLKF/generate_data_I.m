@@ -21,14 +21,14 @@ end
 % 1.2 场景规模与批次时长配置
 Vehicle_num   = 8;                              % 车辆总数
 Anchor_num    = 4;                              % 启用的 UWB 基站数量
-t_end         = 15;                             % 单批次仿真时长 (s)
+t_end         = 20;                             % 单批次仿真时长 (s)
 N_steps       = round(t_end / dt_imu) + 1;      % 单批次 IMU 总步数
-repeat_time   = 1;                              % 独立重复批次数量
+repeat_time   = 5;                              % 独立重复批次数量
 N_steps_total = N_steps * repeat_time;          % 所有批次拼接后的总步数
 
 % 1.3 数据集标识配置
 % 相同的 dataset_id 会直接覆盖同名 MAT 文件，但数据是不一样的
-dataset_id = 'DEKF_DIEKF_DMLKF_15_II';
+dataset_id = 'DEKF_DIEKF_DMLKF_20_5';
 
 if repeat_time < 1 || round(repeat_time) ~= repeat_time
     error('repeat_time must be a positive integer.');

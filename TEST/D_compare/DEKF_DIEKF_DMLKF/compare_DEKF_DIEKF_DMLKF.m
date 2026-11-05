@@ -11,27 +11,28 @@ clc; clear; close all;
 Vehicle_num = 8;                        % 协同车辆总数
 Anchor_num  = 4;                        % UWB 基站总数
 neighbor_k  = 4;                        % 环形拓扑中的车间通信邻居数
+Anchor_Mask_flag = 1;                   % 基站掩码开关 (1: 三档基站掩码; 0: 全基站无掩码)
 
 % 1.2 数据与误差配置
 % 0.7 为保留 30% 未知零偏以破坏先验 (1.0 为完全补偿)
 bias_comp_ratio = 1;                    % IMU 零偏补偿比例
-data_ratio      = 1;                  % 每个批次的数据截取比例
+data_ratio      = 3;                  % 每个批次的数据截取比例
 
 % 1.3 数据集与运行控制标志
-dataset_id = 'DEKF_DIEKF_DMLKF_15_1';  % 数据集标识
-save_flag  = 1;                         % 是否保存实验结果至 CSV
+dataset_id = 'DEKF_DIEKF_DMLKF_20_5';  % 数据集标识
+save_flag  = 0;                         % 是否保存实验结果至 CSV
 run_flag   = 1;                         % 1: 运行实验; 0: 仅读取并打印已有结果
 
 % 1.4 算法超参数与迭代配置
 DIEKF_max_iter     = 3;                % DIEKF 本地高斯牛顿最大迭代次数
 
-DMLKF_max_iter     = 10;                % DMLKF 最大迭代次数
+DMLKF_max_iter     = 1;                % DMLKF 最大迭代次数
 DMLKF_beta_inv     = 70;                % DMLKF 正则化步长参数
 DMLKF_print_flag   = 0;                 % DMLKF 调试信息打印开关
 
 DIEKF_ADMM_iter    = 10;               % DIEKF_ADMM 外层 ADMM 迭代次数
 DIEKF_ADMM_GN_iter = 3;                % DIEKF_ADMM 内层高斯牛顿迭代次数
-DIEKF_ADMM_rho     = 1.2;                % DIEKF_ADMM 惩罚参数
+DIEKF_ADMM_rho     = 0.1;                % DIEKF_ADMM 惩罚参数
 
 
 %% 2. 路径配置与数据集加载
@@ -123,7 +124,7 @@ Noise.UWB_sigma_rel = 0.1;
 %% 3. 生成静态拓扑掩码 (三档基站 + 对称环形车间拓扑)
 % -------------------------------------------------------------------------
 [Anchor_Mask, V2V_Mask] = build_topology( ...
-    Vehicle_num, Anchor_num, neighbor_k);
+    Vehicle_num, Anchor_num, neighbor_k, Anchor_Mask_flag);
 
 
 %% 4. 逐批次独立运行四个滤波器
@@ -260,23 +261,25 @@ end
 % 功能: 构建车辆与基站的观测掩码矩阵，以及车间对称环形通信拓扑掩码矩阵
 % -------------------------------------------------------------------------
 function [Anchor_Mask, V2V_Mask] = build_topology( ...
-        Vehicle_num, Anchor_num, neighbor_k)
+        Vehicle_num, Anchor_num, neighbor_k, Anchor_Mask_flag)
     
-    % --- 1. 基站拓扑：30% 全基站、50% 半基站、其余仅相对测距 ---
-    N_tier1     = round(0.3 * Vehicle_num);
-    N_tier2     = round(0.5 * Vehicle_num);
+     % --- 1. 基站拓扑：Anchor_Mask_flag=1 时启用三档掩码，为 0 时保持全 1 (全基站) ---
     Anchor_Mask = ones(Vehicle_num, Anchor_num);
-    for i = 1:Vehicle_num
-        if i <= N_tier1
-            % Tier 1: 保持全 1
-        elseif i <= N_tier1 + N_tier2
-            for anc_idx = 1:Anchor_num
-                if mod(anc_idx, 2) ~= 0
-                    Anchor_Mask(i, anc_idx) = 0;
+    if Anchor_Mask_flag
+        N_tier1 = round(0.3 * Vehicle_num);
+        N_tier2 = round(0.5 * Vehicle_num);
+        for i = 1:Vehicle_num
+            if i <= N_tier1
+                % Tier 1: 保持全 1
+            elseif i <= N_tier1 + N_tier2
+                for anc_idx = 1:Anchor_num
+                    if mod(anc_idx, 2) ~= 0
+                        Anchor_Mask(i, anc_idx) = 0;
+                    end
                 end
+            else
+                Anchor_Mask(i, :) = 0;
             end
-        else
-            Anchor_Mask(i, :) = 0;
         end
     end
 

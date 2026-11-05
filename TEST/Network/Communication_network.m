@@ -1,7 +1,7 @@
 % 拓扑网络生成与掩码测试脚本 (Demo)
 % 总车辆数必须是偶数
 clc; clear;
-Vehicle_num = 10;
+Vehicle_num = 8;
 Anchor_num = 4; % 假设有4个基站
 
 %% 1. 生成基站拓扑掩码 (Anchor_Mask: I x K)
