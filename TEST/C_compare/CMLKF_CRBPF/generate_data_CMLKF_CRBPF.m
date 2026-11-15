@@ -16,28 +16,28 @@ if mod(dt_uwb, dt_imu) ~= 0
 end
 
 % --- 仿真时间与批次配置 ---
-t_end = 30;                  % 每个批次的仿真时长 (s)
+t_end = 40;                  % 每个批次的仿真时长 (s)
 N_steps = round(t_end / dt_imu) + 1;
 repeat_time = 3;             % 生成的独立批次数量
 N_steps_total = N_steps * repeat_time;
 
 % --- 实体数量配置 ---
-Vehicle_num = 6;             % 车辆/无人机数量 [4, 12]
-Anchor_num  = 10;            % UWB基站数量 [4, 20]
-if Vehicle_num < 4 || Vehicle_num > 12, error('Vehicle_num 必须在 [4, 12] 范围内。'); end
+Vehicle_num = 1;             % 车辆/无人机数量 [1, 12]
+Anchor_num  = 15;            % UWB基站数量 [4, 20]
+if Vehicle_num < 1 || Vehicle_num > 12, error('Vehicle_num 必须在 [1, 12] 范围内。'); end
 if Anchor_num < 4 || Anchor_num > 20,   error('Anchor_num 必须在 [4, 20] 范围内。'); end
 if repeat_time < 1 || round(repeat_time) ~= repeat_time, error('repeat_time 必须是正整数。'); end
 
 % --- 文件标识与随机种子配置 (核心修改点) ---
-dataset_id = 'CMLKF_CRBPF_30';          % 文件名后缀 ID，用于标识数据集
+dataset_id = 'CMLKF_CRBPF_40_5';          % 文件名后缀 ID，用于标识数据集
 % 使用基于时间的随机种子，确保每次运行哪怕 dataset_id 相同，生成的数据也完全不同
 rng('shuffle');              
 rng_state = rng;
 base_seed = rng_state.Seed;  % 记录本次运行的真实基准种子，以便存入数据中追溯
 
 % --- 噪声与先验误差配置 ---
-UWB_noise_params.sigma_anc = 0.03;
-UWB_noise_params.sigma_rel = 0.03;
+UWB_noise_params.sigma_anc = 0.01;
+UWB_noise_params.sigma_rel = 0.01;
 
 IMU_noise_params.sigma_na = 0.05;
 IMU_noise_params.sigma_nw = 0.005;
@@ -46,7 +46,7 @@ IMU_noise_params.sigma_bw = 0.0005;
 
 % XY和Z轴的初始偏差标准差，会给初始位置注入该标准差下的随机位置偏移，并以此标准差构建初始状态协方差矩阵
 position_prior_std_xy = 1.5;
-position_prior_std_z  = 1.5;
+position_prior_std_z  = 1;
 
 std_vec = [position_prior_std_xy; position_prior_std_xy; position_prior_std_z];
 
@@ -252,11 +252,21 @@ end
 
 function [trajectories, anchors, truth_position] = env_setup_E3( ...
         Vehicle_num, Anchor_num, N_steps, dt_imu, t_end)
-    % E3 近共面基站与近距离编队轨迹初始化
-    
-    formation_spacing = 2.5;          % 相邻车辆的水平编队间距
+    % E3 近共面基站与近距离编队轨迹初始化  
+    % formation_spacing = 2.5;          % 相邻车辆的水平编队间距
+    % anchor_height = 5.0;              % 基站名义高度
+    % anchor_z_half_span = 0.25;        % 基站高度相对名义值的单侧错落幅度
+    % vehicle_z_step = 0.5;             % 相邻车辆之间的高度差
+    % anchor_radial_offsets = [11, 12]; % 基站相对编队轨道半径的交替径向偏移
+    % orbit_radius = 20.0;              % 编队中心轨道半径
+    % radius_amplitude = 2.0;           % 轨道半径周期变化幅度
+    % radius_rate = 0.06;               % 轨道半径周期变化角频率
+    % angular_rate = 0.12;              % 编队中心绕场地旋转角速度
+    % z_amplitude = 0.15;               % 每辆车的高度周期变化幅度
+
+    formation_spacing = 4;          % 相邻车辆的水平编队间距
     anchor_height = 5.0;              % 基站名义高度
-    anchor_z_half_span = 0.25;        % 基站高度相对名义值的单侧错落幅度
+    anchor_z_half_span = 0.7;        % 基站高度相对名义值的单侧错落幅度
     vehicle_z_step = 0.5;             % 相邻车辆之间的高度差
     anchor_radial_offsets = [11, 12]; % 基站相对编队轨道半径的交替径向偏移
     orbit_radius = 20.0;              % 编队中心轨道半径
