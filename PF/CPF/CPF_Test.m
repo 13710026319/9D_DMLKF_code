@@ -67,11 +67,13 @@ kf.IMU_Sigma_w   = (0.015)^2 * eye(3);
 kf.UWB_sigma_anc = 0.08;
 kf.UWB_sigma_rel = 0.08;
 
-% CPF 特有的粒子与批处理抗贫化参数配置
-kf.set_particle_count(1000);          % 粒子数量 Np
-kf.batch_size             = 50;      % 渐进式批处理大小 (设为大数如 1000 即为单步全量更新)
-kf.neff_ratio             = 0.5;     % 有效粒子数重采样阈值比例
-kf.rough_coeff            = 0.05;    % 重采样后自适应扩散系数
+% CPF 特有的退火 SMC 与 MCMC 参数配置
+kf.use_tempering          = true;    % 启用自适应似然退火 + MCMC 移动
+kf.set_particle_count(1000);         % 粒子数量 Np
+kf.init_prior([0.1; 0.1; 0.1], 0.1, deg2rad(1.0)); % 赋予与 CIEKF/CMLKF 一致的初始先验分布宽度
+kf.neff_ratio             = 0.5;     % 退火步长控制的 ESS 阈值比例
+kf.n_mcmc                 = 3;       % 每个退火阶段的 MH 采样移动次数
+kf.max_stages             = 300;     % 单历元最大退火阶段数上限
 kf.depletion_streak_limit = 3;       % 连续严重贫化报错终止上限
 
 % 预分配估计结果存储空间
