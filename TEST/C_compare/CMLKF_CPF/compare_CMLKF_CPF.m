@@ -26,15 +26,19 @@ cml_epsilon  = 1e-8;
 cml_beta_inv = 100;
 cml_max_step = Inf;
 
-% --- CPF 参数 ---
-cpf_params.num_particles = 2000;       % 退火后 500~1000 通常足够，可先试 500
-cpf_params.neff_ratio = 0.3;
-cpf_params.n_mcmc = 5;                 % 每个退火阶段 MH 次数
-cpf_params.max_stages = 300;
-cpf_params.min_pos_jitter = 0.001; 
-cpf_params.min_vel_jitter = 0.005;
-cpf_params.depletion_streak_limit = 3;
+% --- CPF 参数(在A数据集下可与CMLKF一样) ---
+% cpf_params.num_particles          = 2000;
+% cpf_params.neff_ratio             = 0.6; % 重采样频率阈值
+% cpf_params.temper_ess_ratio       = 0.8; % 退火步长 ESS 阈值
+% cpf_params.n_mcmc                 = 10;   % 每个退火阶段 MH 次数
+% cpf_params.depletion_streak_limit = 3;
 rng_base_seed = 20261028;
+
+cpf_params.num_particles          = 2000;
+cpf_params.neff_ratio             = 0.6; % 重采样频率阈值
+cpf_params.temper_ess_ratio       = 0.8; % 退火步长 ESS 阈值
+cpf_params.n_mcmc                 = 10;   % 每个退火阶段 MH 次数
+cpf_params.depletion_streak_limit = 3;
 
 % CPF 沿用原对比脚本中的噪声参数。
 cpf_params.noise.IMU_Sigma_a   = (0.05)^2 * eye(3);
@@ -269,6 +273,8 @@ function veh_rmse = run_filter(method_name, trajectories, anchors, ...
             rng(batch_seed, 'twister');
             kf = CPF(Vehicle_num, Anchor_num, anchors, dt_imu, ...
                 p0, v0, R0);
+            configure_standard_noise(kf, ekf_imu_sigma_a, ...
+                ekf_imu_sigma_w, ekf_uwb_sigma_anc, ekf_uwb_sigma_rel);
             configure_cpf(kf, cpf_params);
         otherwise
             error('未知滤波器类型：%s', method_name);
@@ -344,21 +350,17 @@ end
 
 function configure_cpf(kf, cpf_params)
     kf.set_particle_count(cpf_params.num_particles);
-    kf.IMU_Sigma_a   = cpf_params.noise.IMU_Sigma_a;
-    kf.IMU_Sigma_w   = cpf_params.noise.IMU_Sigma_w;
-    kf.UWB_sigma_anc = cpf_params.noise.UWB_sigma_anc;
-    kf.UWB_sigma_rel = cpf_params.noise.UWB_sigma_rel;
-    kf.neff_ratio    = cpf_params.neff_ratio;
-    kf.use_tempering = true;
-    kf.n_mcmc        = cpf_params.n_mcmc;
-    kf.max_stages    = cpf_params.max_stages;
+    kf.neff_ratio             = cpf_params.neff_ratio;
+    kf.temper_ess_ratio       = cpf_params.temper_ess_ratio;
+    kf.n_mcmc                 = cpf_params.n_mcmc;
     kf.depletion_streak_limit = cpf_params.depletion_streak_limit;
 end
 
+
 function initialize_filter_prior(kf, method_name, prior_std_vec, ...
         velocity_prior_std, attitude_std_deg)
+
     if strcmp(method_name, 'CPF')
-        % 按与 CEKF/CMLKF 完全相同的先验标准差在初值 (p0, v0, R0) 周围撒设初始粒子云
         kf.init_prior(prior_std_vec, velocity_prior_std, deg2rad(attitude_std_deg));
     else
         prior_block = blkdiag(diag(prior_std_vec.^2), ...

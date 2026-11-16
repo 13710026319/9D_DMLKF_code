@@ -2,8 +2,7 @@ classdef CPF < handle
     % CPF - Centralized Particle Filter (集中式粒子滤波)
     % 9I 维联合状态 (位置3I、速度3I、姿态SO(3)^I) 上的蒙特卡洛滤波。
     % 预测步严格对应文档 Section II；更新步在文档 Section III 基础上采用
-    % "自适应似然退火 + MCMC 移动"，使 γ=1 时的累积权重等于式(15)(16)(17)，
-    % 以应对先验宽、似然尖 (初始误差大) 导致的粒子贫化。
+    % "自适应似然退火 + MCMC 移动"，以应对初始误差大导致的粒子贫化。
 
     properties
         Vehicle_num
@@ -12,7 +11,7 @@ classdef CPF < handle
         dt_imu
         g_vec
 
-        % 传感器噪声参数
+        % 传感器噪声参数 (由外部脚本直接赋真值)
         IMU_Sigma_a
         IMU_Sigma_w
         UWB_sigma_anc
@@ -20,33 +19,34 @@ classdef CPF < handle
 
         % 粒子滤波核心参数
         Np
-        neff_ratio          % 重采样/退火 ESS 阈值比例 (默认 0.5)
-        rough_coeff         % (仅旧批处理路径) roughening 系数
-        min_pos_jitter      % 位置抖动/协方差下限 (m)
-        min_vel_jitter      % 速度抖动/协方差下限 (m/s)
-        min_att_jitter      % 姿态抖动/协方差下限 (rad)
+        neff_ratio       = 0.5   % 跨历元重采样触发阈值比例 (制御重采样频率)
+        temper_ess_ratio = 0.5   % 退火内部单步 Δγ 的 ESS 阈值比例 (控制退火步长)
+        rough_coeff      = 0.10  % (仅旧批处理路径) roughening 系数
+        min_pos_jitter   = 0.001 % 位置最小协方差保底噪底 (m)
+        min_vel_jitter   = 0.002 % 速度最小协方差保底噪底 (m/s)
+        min_att_jitter   = 0.0005% 姿态最小协方差保底噪底 (rad)
 
         prior_pos_std = [0; 0; 0]
         prior_vel_std = 0
         prior_att_std = 0
 
-        % ---- 似然退火 + MCMC 参数 ----
-        use_tempering   = true   % true: 自适应退火 SMC；false: 旧的批处理路径
+        % ---- 似然退火 + MCMC 内部参数 (max_stages 已固化，无需外部传入) ----
+        use_tempering   = true   % true: 自适应退火 SMC；false: 旧批处理路径
         n_mcmc          = 3      % 每个退火阶段的 MH 迭代次数
         mcmc_scale      = 0.5    % MH 随机游走步长缩放 (自适应调整)
         mcmc_acc_target = 0.25   % 目标接受率
-        max_stages      = 300    % 单历元最大退火阶段数 (超过则强制 γ=1 并记为严重贫化)
+        max_stages      = 300    % 内部固化：单历元最大退火阶段数上限
         min_dgamma      = 1e-6   % 单阶段最小 γ 增量
         last_num_stages = 0      % 诊断：上一历元退火阶段数
         last_accept     = NaN    % 诊断：上一历元平均 MH 接受率
 
-        % ---- 旧批处理路径参数 / 贫化监控 ----
-        batch_size
-        depletion_streak_limit
-        depletion_streak
-        update_count
-        resample_count
-        severe_count
+        % ---- 贫化监控与统计 ----
+        batch_size             = 10
+        depletion_streak_limit = 3
+        depletion_streak       = 0
+        update_count           = 0
+        resample_count         = 0
+        severe_count           = 0
 
         % 粒子内部状态
         P_p
@@ -68,10 +68,10 @@ classdef CPF < handle
             obj.dt_imu      = dt_imu;
             obj.g_vec       = [0; 0; -9.81];
 
-            obj.IMU_Sigma_a   = (0.25)^2 * eye(3);
-            obj.IMU_Sigma_w   = (0.025)^2 * eye(3);
-            obj.UWB_sigma_anc = 0.18;
-            obj.UWB_sigma_rel = 0.18;
+            obj.IMU_Sigma_a   = (0.05)^2 * eye(3);
+            obj.IMU_Sigma_w   = (0.005)^2 * eye(3);
+            obj.UWB_sigma_anc = 0.01;
+            obj.UWB_sigma_rel = 0.01;
 
             if nargin >= 8 && ~isempty(Noise) && isstruct(Noise)
                 if isfield(Noise, 'IMU_Sigma_a'),   obj.IMU_Sigma_a   = Noise.IMU_Sigma_a;   end
@@ -80,23 +80,10 @@ classdef CPF < handle
                 if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
             end
 
-            obj.Np             = 500;
-            obj.neff_ratio     = 0.5;
-            obj.rough_coeff    = 0.10;
-            obj.min_pos_jitter = 0.005;
-            obj.min_vel_jitter = 0.01;
-            obj.min_att_jitter = 0.001;
-
-            obj.batch_size             = 10;
-            obj.depletion_streak_limit = 10;
-            obj.depletion_streak       = 0;
-            obj.update_count           = 0;
-            obj.resample_count         = 0;
-            obj.severe_count           = 0;
-
-            obj.p = p0(:);
-            obj.v = v0(:);
-            obj.R = R0;
+            obj.Np = 1000;
+            obj.p  = p0(:);
+            obj.v  = v0(:);
+            obj.R  = R0;
 
             obj.set_particle_count(obj.Np);
         end
@@ -144,7 +131,7 @@ classdef CPF < handle
         end
 
         % =========================================================
-        % 预测步：文档 Section II (式 6-12)，对粒子向量化
+        % 预测步：文档 Section II (式 6-12)
         % =========================================================
         function predict(obj, acc_m, gyro_m)
             if size(obj.P_p, 2) ~= obj.Np
@@ -163,22 +150,21 @@ classdef CPF < handle
                 ai = acc_m(:, i);
                 wi = gyro_m(:, i);
 
-                e_a = L_a * randn(3, N);                 % 式 (6)
+                e_a = L_a * randn(3, N);
                 e_w = L_w * randn(3, N);
 
                 Ri    = reshape(obj.P_R(:, :, i, :), 3, 3, N);
                 v_old = obj.P_v(idx3, :);
                 p_old = obj.P_p(idx3, :);
 
-                phi = tau * (wi - e_w);                  % 式 (7)
+                phi = tau * (wi - e_w);
                 a_b = ai - e_a;
-                a_n = reshape(pagemtimes(Ri, reshape(a_b, 3, 1, N)), 3, N) ...
-                      + obj.g_vec;                       % 式 (8)
+                a_n = reshape(pagemtimes(Ri, reshape(a_b, 3, 1, N)), 3, N) + obj.g_vec;
 
-                Rn = pagemtimes(Ri, obj.exp_SO3_batch(phi));   % 式 (9)
+                Rn = pagemtimes(Ri, obj.exp_SO3_batch(phi));
                 obj.P_R(:, :, i, :) = reshape(Rn, 3, 3, 1, N);
-                obj.P_v(idx3, :) = v_old + tau * a_n;                       % 式 (10)
-                obj.P_p(idx3, :) = p_old + tau * v_old + 0.5 * tau^2 * a_n; % 式 (11)
+                obj.P_v(idx3, :) = v_old + tau * a_n;
+                obj.P_p(idx3, :) = p_old + tau * v_old + 0.5 * tau^2 * a_n;
             end
 
             obj.update_mmse_estimate();
@@ -214,8 +200,6 @@ classdef CPF < handle
             else
                 obj.depletion_streak = 0;
             end
-
-            obj.update_mmse_estimate();
         end
 
         function meas = collect_measurements(obj, uwb_anc, uwb_rel)
@@ -224,12 +208,12 @@ classdef CPF < handle
             va = uwb_anc(sub2ind(size(uwb_anc), ia, la));
 
             mask = ~isnan(uwb_rel);
-            mask(1:I_num+1:end) = false;                 % 去掉对角线
+            mask(1:I_num+1:end) = false;
             [ir, jr] = find(mask);
             vr = uwb_rel(sub2ind(size(uwb_rel), ir, jr));
 
             meas.val  = [va; vr];
-            meas.type = [ones(numel(va), 1); 2 * ones(numel(vr), 1)];  % 1 基站, 2 车间
+            meas.type = [ones(numel(va), 1); 2 * ones(numel(vr), 1)];
             meas.i    = [ia; ir];
             meas.j    = [la; jr];
             meas.var  = [obj.UWB_sigma_anc^2 * ones(numel(va), 1); ...
@@ -237,7 +221,6 @@ classdef CPF < handle
         end
 
         function ll = loglik(obj, Pp, meas)
-            % 联合对数似然 (式 15-16 的对数，省略与粒子无关的常数项)
             M  = numel(meas.val);
             ll = zeros(1, size(Pp, 2));
             for m = 1:M
@@ -254,22 +237,40 @@ classdef CPF < handle
             end
         end
 
-        % ---------------- 自适应似然退火 SMC ----------------
+        % ---------------- 自适应似然退火 SMC (已修复 γ=1 退出与双阈值分离) ----------------
         function severe = update_tempered(obj, meas)
             I_num = obj.Vehicle_num;
             N     = obj.Np;
             nP    = 3 * I_num;
-            ess_tgt = obj.neff_ratio * N;
-            severe  = false;
 
-            obj.update_mmse_estimate();                   % R 作为切空间参考
-            [X, Rref] = obj.to_chart();                   % 9I x N : [p; v; phi]
+            % 分离两个阈值：ess_temp_tgt 控制退火步长，ess_res_tgt 控制重采样触发
+            ess_temp_tgt = obj.temper_ess_ratio * N;
+            ess_res_tgt  = obj.neff_ratio * N;
+            severe       = false;
 
             logw = obj.P_logw(:)';
             logw = logw - max(logw);
             logw = logw - log(sum(exp(logw)));
 
-            % 以当前加权云的高斯近似作为 MH 的先验密度
+            logL = obj.loglik(obj.P_p, meas);
+
+            % [快速通道]：若一步直接加满 γ=1 后，ESS 仍高于重采样阈值 ess_res_tgt，
+            % 则无需退火、无需切空间高斯拟合与 MCMC 扰动，直接按纯正 SIR 粒子滤波更新权重！
+            logw_full = logw + logL;
+            logw_full = logw_full - max(logw_full);
+            logw_full = logw_full - log(sum(exp(logw_full)));
+            if obj.ess_of(logw_full) >= ess_res_tgt
+                obj.P_logw = log(max(exp(logw_full), realmin));
+                obj.update_mmse_estimate();
+                obj.last_num_stages = 1;
+                obj.last_accept     = NaN;
+                return;
+            end
+
+            % [退火通道]：当直接更新会导致 ESS < ess_res_tgt 时，启动切空间退火 + MCMC
+            obj.update_mmse_estimate();
+            [X, Rref] = obj.to_chart();
+
             w0     = exp(logw);
             mu0    = X * w0(:);
             Xc     = X - mu0;
@@ -280,15 +281,14 @@ classdef CPF < handle
             optsLT = struct('LT', true);
             logprior = @(Xm) -0.5 * sum(linsolve(L0, Xm - mu0, optsLT).^2, 1);
 
-            logL = obj.loglik(X(1:nP, :), meas);
-            lp   = logprior(X);
+            lp      = logprior(X);
+            acc_sum = 0;
+            acc_cnt = 0;
 
-            acc_sum = 0; acc_cnt = 0;
-
-            % 起始权重已经贫化则先重采样 + 移动
-            if obj.ess_of(logw) < ess_tgt
+            % 若起始先验权重已低于重采样阈值，先重采样归整
+            if obj.ess_of(logw) < ess_res_tgt
                 idx  = obj.systematic_resample(exp(logw));
-                X = X(:, idx); logL = logL(idx); lp = lp(idx);
+                X    = X(:, idx); logL = logL(idx); lp = lp(idx);
                 logw = -log(N) * ones(1, N);
                 obj.resample_count = obj.resample_count + 1;
                 [X, logL, lp, acc] = obj.mcmc_move(X, logL, lp, 0, meas, logprior, fvar);
@@ -302,40 +302,54 @@ classdef CPF < handle
                 r = 1 - gamma;
 
                 if n_stage >= obj.max_stages
-                    dg = r;  severe = true;               % 强制收尾
+                    dg = r;
+                    severe = true;
                 else
-                    dg = obj.next_gamma(logw, logL, r, ess_tgt);
+                    dg = obj.next_gamma(logw, logL, r, ess_temp_tgt);
                     dg = min(r, max(dg, obj.min_dgamma));
                 end
 
-                logw = logw + dg * logL;                  % 增量权重 L^dg
+                logw = logw + dg * logL;
                 logw = logw - max(logw);
                 logw = logw - log(sum(exp(logw)));
                 gamma = gamma + dg;
                 if r - dg < 1e-12, gamma = 1; end
 
-                if gamma < 1 || obj.ess_of(logw) < ess_tgt
-                    idx = obj.systematic_resample(exp(logw));   % 式 (23)
-                    X = X(:, idx); logL = logL(idx); lp = lp(idx);
-                    logw = -log(N) * ones(1, N);                % 式 (24)
+                if gamma < 1
+                    % 中间退火阶段：重采样 + 在当前温度 gamma 下执行 MCMC 移动
+                    idx  = obj.systematic_resample(exp(logw));
+                    X    = X(:, idx); logL = logL(idx); lp = lp(idx);
+                    logw = -log(N) * ones(1, N);
                     obj.resample_count = obj.resample_count + 1;
                     [X, logL, lp, acc] = obj.mcmc_move(X, logL, lp, gamma, meas, logprior, fvar);
                     acc_sum = acc_sum + acc; acc_cnt = acc_cnt + 1;
+                else
+                    % [修复 γ=1 退出缺陷]：到达终点 γ=1 时，若经历了多步退火或最终 ESS 低于重采样阈值，
+                    % 先用当前精确连续权重更新一次粒子状态，再重采样并在 γ=1 完整后验下做最终 MCMC 细化，
+                    % 消除残留的低权重废粒子，确保进入下一拍预测步的粒子 100% 有效！
+                    if n_stage > 1 || obj.ess_of(logw) < ess_res_tgt
+                        idx  = obj.systematic_resample(exp(logw));
+                        X    = X(:, idx); logL = logL(idx); lp = lp(idx);
+                        logw = -log(N) * ones(1, N);
+                        obj.resample_count = obj.resample_count + 1;
+                        [X, logL, lp, acc] = obj.mcmc_move(X, logL, lp, 1.0, meas, logprior, fvar);
+                        acc_sum = acc_sum + acc; acc_cnt = acc_cnt + 1;
+                    end
                 end
             end
 
-            % 写回粒子状态
+            % 写回粒子状态并计算最终 MMSE 后验估计
             obj.P_p = X(1:nP, :);
             obj.P_v = X(nP+1:2*nP, :);
             obj.from_chart(X(2*nP+1:end, :), Rref);
             obj.P_logw = log(max(exp(logw), realmin));
+            obj.update_mmse_estimate();
 
             obj.last_num_stages = n_stage;
             obj.last_accept     = acc_sum / max(acc_cnt, 1);
         end
 
         function dg = next_gamma(obj, logw, logL, r, tgt)
-            % 二分法：使 ESS(w * L^dg) >= tgt 的最大 dg
             if obj.ess_of(logw + r * logL) >= tgt
                 dg = r; return;
             end
@@ -352,10 +366,9 @@ classdef CPF < handle
         end
 
         function [X, logL, lp, acc] = mcmc_move(obj, X, logL, lp, gamma, meas, logprior, fvar)
-            % 目标: 高斯化先验 * L^gamma；提议: 云样本协方差的随机游走
             I_num = obj.Vehicle_num;
-            N = size(X, 2);
-            d = size(X, 1);
+            N  = size(X, 2);
+            d  = size(X, 1);
             nP = 3 * I_num;
 
             Xc = X - mean(X, 2);
@@ -372,9 +385,9 @@ classdef CPF < handle
                 log_a = gamma * (logLp - logL) + (lpp - lp);
                 ok    = log(rand(1, N)) < log_a;
 
-                X(:, ok)  = Xp(:, ok);
-                logL(ok)  = logLp(ok);
-                lp(ok)    = lpp(ok);
+                X(:, ok) = Xp(:, ok);
+                logL(ok) = logLp(ok);
+                lp(ok)   = lpp(ok);
 
                 a = mean(ok);
                 acc_tot = acc_tot + a;
@@ -409,17 +422,18 @@ classdef CPF < handle
                 sub.i   = meas.i(sel);     sub.j    = meas.j(sel);
                 sub.var = meas.var(sel);
 
-                lw = obj.P_logw + obj.loglik(obj.P_p, sub);   % 式 (17)
+                lw = obj.P_logw + obj.loglik(obj.P_p, sub);
                 lw = lw - max(lw);
-                w  = exp(lw); w = w / sum(w);                 % 式 (18)
+                w  = exp(lw); w = w / sum(w);
                 obj.P_logw = log(max(w, realmin));
 
-                Neff = 1 / sum(w.^2);                         % 式 (22)
+                Neff = 1 / sum(w.^2);
                 if Neff < obj.neff_ratio * obj.Np
                     if Neff / obj.Np < 0.05, severe = true; end
                     obj.resample_and_roughen(w);
                 end
             end
+            obj.update_mmse_estimate();
         end
 
         function resample_and_roughen(obj, w_norm)
@@ -542,7 +556,6 @@ classdef CPF < handle
         end
 
         function R = exp_SO3_batch(~, phi)
-            % phi: 3xN -> R: 3x3xN，R = cos(t) I + A [phi]x + B phi phi'
             N = size(phi, 2);
             x = phi(1, :); y = phi(2, :); z = phi(3, :);
             th2 = x.^2 + y.^2 + z.^2;
@@ -551,7 +564,7 @@ classdef CPF < handle
             ths = th; ths(small) = 1;
             A = sin(ths) ./ ths;               A(small) = 1 - th2(small) / 6;
             B = (1 - cos(ths)) ./ ths.^2;      B(small) = 0.5 - th2(small) / 24;
-            C = 1 - B .* th2;                  % = cos(theta)
+            C = 1 - B .* th2;
 
             R = zeros(3, 3, N);
             R(1,1,:) = reshape(C + B.*x.^2,   1, 1, N);
@@ -566,7 +579,6 @@ classdef CPF < handle
         end
 
         function v = log_SO3_batch(~, R)
-            % R: 3x3xN -> v: 3xN (假定旋转角远小于 pi)
             N = size(R, 3);
             tr = reshape(R(1,1,:) + R(2,2,:) + R(3,3,:), 1, N);
             w = 0.5 * [reshape(R(3,2,:) - R(2,3,:), 1, N); ...

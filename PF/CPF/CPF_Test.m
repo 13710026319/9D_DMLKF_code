@@ -61,19 +61,18 @@ end
 % 实例化 CPF
 kf = CPF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0);
 
-% 噪声参数设置 (实时生效)
-kf.IMU_Sigma_a   = (0.25)^2  * eye(3);
-kf.IMU_Sigma_w   = (0.015)^2 * eye(3);
-kf.UWB_sigma_anc = 0.08;
-kf.UWB_sigma_rel = 0.08;
+% 噪声参数设置 (直接使用数据集真值)
+kf.IMU_Sigma_a   = IMU_noise_params.sigma_na^2 * eye(3);
+kf.IMU_Sigma_w   = IMU_noise_params.sigma_nw^2 * eye(3);
+kf.UWB_sigma_anc = UWB_noise_params.sigma_anc;
+kf.UWB_sigma_rel = UWB_noise_params.sigma_rel;
 
-% CPF 特有的退火 SMC 与 MCMC 参数配置
-kf.use_tempering          = true;    % 启用自适应似然退火 + MCMC 移动
-kf.set_particle_count(1000);         % 粒子数量 Np
-kf.init_prior([0.1; 0.1; 0.1], 0.1, deg2rad(1.0)); % 赋予与 CIEKF/CMLKF 一致的初始先验分布宽度
-kf.neff_ratio             = 0.5;     % 退火步长控制的 ESS 阈值比例
-kf.n_mcmc                 = 3;       % 每个退火阶段的 MH 采样移动次数
-kf.max_stages             = 300;     % 单历元最大退火阶段数上限
+% CPF 参数配置 (无需传入 max_stages)
+kf.set_particle_count(1300);         % 粒子数量 Np
+kf.init_prior([0.1; 0.1; 0.1], 0.1, deg2rad(1.0)); % 初始先验分布宽度
+kf.neff_ratio             = 0.3;     % 跨拍重采样触发阈值比例
+kf.temper_ess_ratio       = 0.8;     % 退火内部步长控制的 ESS 阈值比例
+kf.n_mcmc                 = 3;       % 每个退火阶段 MH 移动次数
 kf.depletion_streak_limit = 3;       % 连续严重贫化报错终止上限
 
 % 预分配估计结果存储空间
