@@ -72,7 +72,7 @@ kf.set_particle_count(1300);         % 粒子数量 Np
 kf.init_prior([0.1; 0.1; 0.1], 0.1, deg2rad(1.0)); % 初始先验分布宽度
 kf.neff_ratio             = 0.3;     % 跨拍重采样触发阈值比例
 kf.temper_ess_ratio       = 0.8;     % 退火内部步长控制的 ESS 阈值比例
-kf.n_mcmc                 = 3;       % 每个退火阶段 MH 移动次数
+kf.n_mcmc                 = 8;       % 每个退火阶段 MH 移动次数
 kf.depletion_streak_limit = 3;       % 连续严重贫化报错终止上限
 
 % 预分配估计结果存储空间

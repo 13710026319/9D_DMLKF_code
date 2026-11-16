@@ -33,7 +33,8 @@ classdef CPF < handle
         % ---- 似然退火 + MCMC 内部参数 (max_stages 已固化，无需外部传入) ----
         use_tempering   = true   % true: 自适应退火 SMC；false: 旧批处理路径
         n_mcmc          = 3      % 每个退火阶段的 MH 迭代次数
-        mcmc_scale      = 0.5    % MH 随机游走步长缩放 (自适应调整)
+        n_mcmc_final    = 15     % 最终 γ=1 阶段的 MH 迭代次数
+        mcmc_scale      = 0.5    % MH 随机游走步长缩放 (自适应调整)      
         mcmc_acc_target = 0.25   % 目标接受率
         max_stages      = 300    % 内部固化：单历元最大退火阶段数上限
         min_dgamma      = 1e-6   % 单阶段最小 γ 增量
@@ -332,7 +333,7 @@ classdef CPF < handle
                         X    = X(:, idx); logL = logL(idx); lp = lp(idx);
                         logw = -log(N) * ones(1, N);
                         obj.resample_count = obj.resample_count + 1;
-                        [X, logL, lp, acc] = obj.mcmc_move(X, logL, lp, 1.0, meas, logprior, fvar);
+                        [X, logL, lp, acc] = obj.mcmc_move(X, logL, lp, 1.0, meas, logprior, fvar, obj.n_mcmc_final);
                         acc_sum = acc_sum + acc; acc_cnt = acc_cnt + 1;
                     end
                 end
@@ -365,7 +366,10 @@ classdef CPF < handle
             dg = lo;
         end
 
-        function [X, logL, lp, acc] = mcmc_move(obj, X, logL, lp, gamma, meas, logprior, fvar)
+        function [X, logL, lp, acc] = mcmc_move(obj, X, logL, lp, gamma, meas, logprior, fvar, n_it)
+            if nargin < 9 || isempty(n_it)
+                n_it = obj.n_mcmc;
+            end
             I_num = obj.Vehicle_num;
             N  = size(X, 2);
             d  = size(X, 1);
@@ -378,7 +382,7 @@ classdef CPF < handle
             if flag ~= 0, Lc = diag(sqrt(diag(Sc))); end
 
             acc_tot = 0;
-            for it = 1:obj.n_mcmc
+            for it = 1:n_it
                 Xp    = X + obj.mcmc_scale * (Lc * randn(d, N));
                 logLp = obj.loglik(Xp(1:nP, :), meas);
                 lpp   = logprior(Xp);
@@ -394,7 +398,7 @@ classdef CPF < handle
                 obj.mcmc_scale = min(1.5, max(0.02, ...
                     obj.mcmc_scale * exp(a - obj.mcmc_acc_target)));
             end
-            acc = acc_tot / obj.n_mcmc;
+            acc = acc_tot / n_it;
         end
 
         function fv = floor_variance(obj)

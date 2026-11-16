@@ -22,10 +22,10 @@ repeat_time = 3;             % 生成的独立批次数量
 N_steps_total = N_steps * repeat_time;
 
 % --- 实体数量配置 ---
-Vehicle_num = 2;             % 车辆/无人机数量 [1, 12]
-Anchor_num  = 15;            % UWB基站数量 [4, 20]
+Vehicle_num = 3;             % 车辆/无人机数量 [1, 12]
+Anchor_num  = 40;            % UWB基站数量 [4, 40]
 if Vehicle_num < 1 || Vehicle_num > 12, error('Vehicle_num 必须在 [1, 12] 范围内。'); end
-if Anchor_num < 4 || Anchor_num > 20,   error('Anchor_num 必须在 [4, 20] 范围内。'); end
+if Anchor_num < 4 || Anchor_num > 40,   error('Anchor_num 必须在 [4, 40] 范围内。'); end
 if repeat_time < 1 || round(repeat_time) ~= repeat_time, error('repeat_time 必须是正整数。'); end
 
 % --- 文件标识与随机种子配置 (核心修改点) ---
@@ -253,16 +253,6 @@ end
 function [trajectories, anchors, truth_position] = env_setup_E3( ...
         Vehicle_num, Anchor_num, N_steps, dt_imu, t_end)
     % E3 近共面基站与近距离编队轨迹初始化  
-    % formation_spacing = 2.5;          % 相邻车辆的水平编队间距
-    % anchor_height = 5.0;              % 基站名义高度
-    % anchor_z_half_span = 0.25;        % 基站高度相对名义值的单侧错落幅度
-    % vehicle_z_step = 0.5;             % 相邻车辆之间的高度差
-    % anchor_radial_offsets = [11, 12]; % 基站相对编队轨道半径的交替径向偏移
-    % orbit_radius = 20.0;              % 编队中心轨道半径
-    % radius_amplitude = 2.0;           % 轨道半径周期变化幅度
-    % radius_rate = 0.06;               % 轨道半径周期变化角频率
-    % angular_rate = 0.12;              % 编队中心绕场地旋转角速度
-    % z_amplitude = 0.15;               % 每辆车的高度周期变化幅度
 
     formation_spacing = 4;          % 相邻车辆的水平编队间距
     anchor_height = 5.0;              % 基站名义高度
@@ -275,16 +265,20 @@ function [trajectories, anchors, truth_position] = env_setup_E3( ...
     angular_rate = 0.12;              % 编队中心绕场地旋转角速度
     z_amplitude = 0.15;               % 每辆车的高度周期变化幅度
 
-    % 基站生成 (带高度错落)
+    % 基站生成 (前 20 个按环形高度错落分布，第 21~40 个直接位于前 20 个正上方 0.2m 处)
     anchors = zeros(Anchor_num, 3);
-    for a = 1:Anchor_num
-        angle = 0.3 + 2*pi*(a - 1)/Anchor_num;
+    base_num = min(Anchor_num, 20);
+    for a = 1:base_num
+        angle = 0.3 + 2*pi*(a - 1)/base_num;
         offset_index = mod(a - 1, numel(anchor_radial_offsets)) + 1;
         radial_offset = anchor_radial_offsets(offset_index);
         anchors(a, :) = [ ...
             60 + (orbit_radius + radial_offset)*cos(angle), ...
             60 + (orbit_radius + radial_offset)*sin(angle), ...
             anchor_height + anchor_z_half_span*sin(1.7*(a - 1) + 0.3)];
+    end
+    for a = 21:Anchor_num
+        anchors(a, :) = anchors(a - 20, :) + [0, 0, 0.2];
     end
 
     % 编队偏移量分配
