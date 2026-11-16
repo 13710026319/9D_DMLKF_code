@@ -11,7 +11,7 @@ clc; clear; close all;
 %% ==================== 1. 测试参数配置 ====================
 Vehicle_num = 6;
 Anchor_num  = 10;
-dataset_id  = 'CMLKF_CRBPF_30';
+dataset_id  = 'CMLKF_CPF_30';
 run_flag    = 1;          % 当前脚本暂不读取历史结果
 save_flag   = 0;          % 暂时不保存 CSV
 figure_save = 0;          % 暂时不保存图片

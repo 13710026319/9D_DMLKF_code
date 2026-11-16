@@ -22,7 +22,7 @@ repeat_time = 3;             % 生成的独立批次数量
 N_steps_total = N_steps * repeat_time;
 
 % --- 实体数量配置 ---
-Vehicle_num = 1;             % 车辆/无人机数量 [1, 12]
+Vehicle_num = 2;             % 车辆/无人机数量 [1, 12]
 Anchor_num  = 15;            % UWB基站数量 [4, 20]
 if Vehicle_num < 1 || Vehicle_num > 12, error('Vehicle_num 必须在 [1, 12] 范围内。'); end
 if Anchor_num < 4 || Anchor_num > 20,   error('Anchor_num 必须在 [4, 20] 范围内。'); end

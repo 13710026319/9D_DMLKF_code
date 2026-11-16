@@ -12,7 +12,7 @@ save_flag   = 0;
 bias_comp_ratio = 1; 
 
 % 控制截取数据集的比例 (例如 0.2 表示只跑前 20% 的数据，1.0为全部)
-data_ratio = 1;
+data_ratio = 0.2;
 
 % 路径配置 [指向 CPF 的路径]
 data_dir = 'E:\DMLKF_code\Data';

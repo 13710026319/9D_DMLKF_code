@@ -1,7 +1,7 @@
 classdef CPF < handle
     % CPF - Centralized Particle Filter (集中式粒子滤波)
     % 核心原理：在 9I 维全局联合状态空间 (位置3I、速度3I、姿态SO(3)^I) 直接撒粒子进行蒙特卡洛采样与重采样
-    % 严格对齐 Centralized Particle Filter 算法文档，支持渐进式批处理与严重贫化自动监测终止
+    % 严格对齐 Centralized Particle Filter 算法文档，支持先验分布初始化、渐进式批处理与贫化监控
     
     properties
         Vehicle_num
@@ -17,32 +17,33 @@ classdef CPF < handle
         UWB_sigma_rel
         
         % 粒子滤波核心参数
-        Np               % 粒子总数 (支持外部直接赋值修改或调用 set_particle_count)
+        Np               % 粒子总数
         neff_ratio       % 重采样阈值比例 (默认 0.5)
         rough_coeff      % 重采样后 Roughening 自适应扩散系数
         min_pos_jitter   % 位置抖动绝对下限 (m)
         min_vel_jitter   % 速度抖动绝对下限 (m/s)
         min_att_jitter   % 姿态抖动绝对下限 (rad)
         
-        % 批处理与贫化监控参数
-        batch_size               % 渐进式权重更新的批大小 (设为大数如 1000 即为单步全量更新)
-        depletion_streak_limit   % 连续严重贫化警告次数上限，超过则终止本次运行
-        depletion_streak         % 当前连续严重贫化警告计数
-        update_count             % 累计 UWB 更新次数
-        resample_count           % 累计重采样次数
-        severe_count             % 累计严重贫化警告次数
+        % 记录初始先验标准差 (供 set_particle_count 保持分布)
+        prior_pos_std = [0; 0; 0]
+        prior_vel_std = 0
+        prior_att_std = 0
         
-        % 粒子内部核心状态变量 (9I 维全局联合粒子云)
-        % P_p   : 3I x Np       (所有粒子的全局位置向量)
-        % P_v   : 3I x Np       (所有粒子的全局速度向量)
-        % P_R   : 3 x 3 x I x Np(所有粒子的全局姿态旋转矩阵)
-        % P_logw: 1 x Np        (所有粒子的对数权重)
+        % 批处理与贫化监控参数
+        batch_size               % 渐进式权重更新的批大小
+        depletion_streak_limit   % 连续严重贫化警告次数上限 (按历元计)
+        depletion_streak         % 当前连续严重贫化历元计数
+        update_count             % 累计 UWB 更新历元次数
+        resample_count           % 累计重采样次数
+        severe_count             % 累计严重贫化历元次数
+        
+        % 粒子内部核心状态变量
         P_p
         P_v
         P_R
         P_logw
         
-        % 供外部调用的 MMSE 后验估计值 (与 CMLKF / CEKF 接口完全对齐)
+        % 供外部调用的 MMSE 后验估计值
         p
         v
         R
@@ -56,7 +57,7 @@ classdef CPF < handle
             obj.dt_imu      = dt_imu;
             obj.g_vec       = [0; 0; -9.81];
             
-            % 1. 默认噪声参数配置 (支持外部随时覆盖)
+            % 1. 默认噪声参数配置
             obj.IMU_Sigma_a   = (0.25)^2 * eye(3);      
             obj.IMU_Sigma_w   = (0.025)^2 * eye(3);     
             obj.UWB_sigma_anc = 0.18;                  
@@ -71,15 +72,15 @@ classdef CPF < handle
             
             % 2. 粒子与抗贫化默认配置
             obj.Np             = 500;
-            obj.neff_ratio     = 0.5;     % 对应文档 N_thresh = 0.5 * N_p
-            obj.rough_coeff    = 0.02;    % 重采样后自适应扩散比例
-            obj.min_pos_jitter = 1e-4;    % 位置最小抖动下限 (m)
-            obj.min_vel_jitter = 1e-4;    % 速度最小抖动下限 (m/s)
-            obj.min_att_jitter = 1e-4;    % 姿态最小抖动下限 (rad)
+            obj.neff_ratio     = 0.5;
+            obj.rough_coeff    = 0.10;
+            obj.min_pos_jitter = 0.005;   % 5mm 位置最小探索下限，弥补 100Hz IMU 双重积分位置扩散不足
+            obj.min_vel_jitter = 0.01;    % 1cm/s 速度最小探索下限
+            obj.min_att_jitter = 0.001;   % 姿态最小抖动下限 (rad)
             
             % 3. 批处理与贫化监控配置
-            obj.batch_size             = 1000; % 默认大数即单历元全量更新；可调小以启用渐进批处理
-            obj.depletion_streak_limit = 3;    % 连续超过 3 次严重贫化则报错终止
+            obj.batch_size             = 10;
+            obj.depletion_streak_limit = 10;
             obj.depletion_streak       = 0;
             obj.update_count           = 0;
             obj.resample_count         = 0;
@@ -94,28 +95,60 @@ classdef CPF < handle
         end
         
         function set_particle_count(obj, Np_new)
-            % 根据当前状态 (p, v, R) 初始化/重置 Np_new 个粒子
-            I_num  = obj.Vehicle_num;
+            % 根据当前状态 (p, v, R) 及已配置的先验标准差铺设粒子云
             obj.Np = Np_new;
+            obj.init_prior(obj.prior_pos_std, obj.prior_vel_std, obj.prior_att_std);
+        end
+        
+        function init_prior(obj, pos_std_vec, vel_std, att_std_rad)
+            % 按照给定的位置、速度、姿态先验标准差在初值 (p, v, R) 周围生成初始粒子云
+            obj.prior_pos_std = pos_std_vec(:);
+            obj.prior_vel_std = vel_std;
+            obj.prior_att_std = att_std_rad;
             
-            obj.P_p    = repmat(obj.p(:), 1, Np_new);
-            obj.P_v    = repmat(obj.v(:), 1, Np_new);
-            obj.P_R    = repmat(obj.R, 1, 1, 1, Np_new);
-            obj.P_logw = log(1 / Np_new) * ones(1, Np_new);
+            I_num   = obj.Vehicle_num;
+            Np_curr = obj.Np;
+            
+            obj.P_p    = repmat(obj.p(:), 1, Np_curr);
+            obj.P_v    = repmat(obj.v(:), 1, Np_curr);
+            obj.P_R    = repmat(obj.R, 1, 1, 1, Np_curr);
+            obj.P_logw = log(1 / Np_curr) * ones(1, Np_curr);
+            
+            if any(pos_std_vec > 0) || vel_std > 0 || att_std_rad > 0
+                pos_std_full = repmat(pos_std_vec(:), I_num, 1);
+                
+                % 采样零均值高斯扰动并去均值，确保粒子云初始样本均值严格等于 p0, v0
+                noise_p = pos_std_full .* randn(3 * I_num, Np_curr);
+                noise_p = noise_p - mean(noise_p, 2);
+                obj.P_p = obj.P_p + noise_p;
+                
+                noise_v = vel_std * randn(3 * I_num, Np_curr);
+                noise_v = noise_v - mean(noise_v, 2);
+                obj.P_v = obj.P_v + noise_v;
+                
+                if att_std_rad > 0
+                    for i = 1:I_num
+                        noise_phi = att_std_rad * randn(3, Np_curr);
+                        noise_phi = noise_phi - mean(noise_phi, 2);
+                        for k = 1:Np_curr
+                            obj.P_R(:, :, i, k) = obj.R(:, :, i) * obj.exp_SO3(noise_phi(:, k));
+                        end
+                    end
+                end
+            end
         end
         
         function predict(obj, acc_m, gyro_m)
             % 预测步：对应文档 Section II (公式 6-12)
-            % 若外部直接修改了 obj.Np，自动同步粒子数组大小
             if size(obj.P_p, 2) ~= obj.Np
                 obj.set_particle_count(obj.Np);
             end
             
-            I_num = obj.Vehicle_num;
-            tau   = obj.dt_imu;
+            I_num   = obj.Vehicle_num;
+            tau     = obj.dt_imu;
             Np_curr = obj.Np;
             
-            % 实时根据当前 IMU_Sigma_a 和 IMU_Sigma_w 计算噪声采样下三角阵 (修复 CRBPF 静态噪声 Bug)
+            % 实时根据当前 IMU_Sigma_a 和 IMU_Sigma_w 计算噪声下三角阵
             L_a = chol((obj.IMU_Sigma_a + obj.IMU_Sigma_a') / 2, 'lower');
             L_w = chol((obj.IMU_Sigma_w + obj.IMU_Sigma_w') / 2, 'lower');
             
@@ -124,7 +157,7 @@ classdef CPF < handle
                 ai = acc_m(:, i);
                 wi = gyro_m(:, i);
                 
-                % 批量独立采样第 i 辆车在所有粒子上的过程噪声 (式 6)
+                % 批量独立采样过程噪声 (式 6)
                 e_a_all = L_a * randn(3, Np_curr);
                 e_w_all = L_w * randn(3, Np_curr);
                 
@@ -143,9 +176,7 @@ classdef CPF < handle
                     obj.P_p(idx_3, k) = p_old + tau * v_old + 0.5 * (tau^2) * a_n;
                 end
             end
-            % 粒子先验权重保持不变: w_{t|t+1}^{(k)} = w_{t|t}^{(k)} (式 12)
             
-            % 同步更新外部 MMSE 估计
             obj.update_mmse_estimate();
         end
         
@@ -183,7 +214,6 @@ classdef CPF < handle
             M = length(meas_vals);
             if M == 0, return; end
             
-            % 实时读取当前 UWB 测量方差
             var_anc = obj.UWB_sigma_anc^2;
             var_rel = obj.UWB_sigma_rel^2;
             
@@ -191,7 +221,7 @@ classdef CPF < handle
             R_var_all(meas_types == 1) = var_anc;
             R_var_all(meas_types == 2) = var_rel;
             
-            % --- 2. 渐进式批处理更新 (当 batch_size >= M 时即为单步全量更新) ---
+            % --- 2. 渐进式批处理更新 ---
             batch_sz = max(1, obj.batch_size);
             if batch_sz < M
                 shuffle_idx = randperm(M);
@@ -202,35 +232,37 @@ classdef CPF < handle
             end
             
             num_batches = ceil(M / batch_sz);
+            epoch_severe_flag = false;
             
             for b = 1:num_batches
                 idx_start = (b - 1) * batch_sz + 1;
                 idx_end   = min(b * batch_sz, M);
                 
-                % 在对数域累加当前批次所有测量的联合对数似然 (式 13-17，向量化计算)
+                % 计算当前批次在粒子云上的先验预测分布宽度，用于自适应似然温度保护
                 log_lik_batch = zeros(1, obj.Np);
                 
                 for m = idx_start:idx_end
                     z_meas = meas_vals(m);
                     sig2   = R_var_all(m);
                     i      = meas_nodes(m, 1);
-                    p_i_particles = obj.P_p(3*i-2 : 3*i, :); % 3 x Np
+                    p_i_particles = obj.P_p(3*i-2 : 3*i, :);
                     
                     if meas_types(m) == 1
-                        % 基站测距预测 (式 13)
                         l_idx = meas_nodes(m, 2);
                         c_l   = obj.anchors(l_idx, :)';
                         diff  = p_i_particles - c_l;
                     else
-                        % 车间相对测距预测 (式 14：直接取同一粒子内的双车位置差)
                         j     = meas_nodes(m, 2);
-                        p_j_particles = obj.P_p(3*j-2 : 3*j, :); % 3 x Np
+                        p_j_particles = obj.P_p(3*j-2 : 3*j, :);
                         diff  = p_i_particles - p_j_particles;
                     end
                     
-                    dist_pred = sqrt(sum(diff.^2, 1)); % 1 x Np
+                    dist_pred = sqrt(sum(diff.^2, 1));
                     res_sq    = (z_meas - dist_pred).^2;
-                    log_lik_batch = log_lik_batch - 0.5 * (res_sq / sig2) - 0.5 * log(2 * pi * sig2);
+                    
+                    % 当初始位置偏差极大时，结合粒子群自身的预测残差方差防止单步似然全部下溢为0
+                    sig2_eff  = sig2 + 0.1 * var(dist_pred);
+                    log_lik_batch = log_lik_batch - 0.5 * (res_sq / sig2_eff) - 0.5 * log(2 * pi * sig2_eff);
                 end
                 
                 % 权重更新与归一化 (式 17-18)
@@ -243,26 +275,26 @@ classdef CPF < handle
                 % 评估有效粒子数 N_eff (式 22)
                 N_eff = 1 / sum(w_norm.^2);
                 
-                % 贫化监测与重采样判断 (式 23-24)
                 if N_eff < obj.neff_ratio * obj.Np
-                    if N_eff / obj.Np < 0.1
-                        obj.severe_count     = obj.severe_count + 1;
-                        obj.depletion_streak = obj.depletion_streak + 1;
-                        if obj.depletion_streak > obj.depletion_streak_limit
-                            error('CPF:SevereParticleDepletion', ...
-                                  ['连续 %d 次出现粒子严重贫化警告 (UWB 更新序号 %d, 累计 %d 次)，' ...
-                                   '已终止本次运行以便调整参数。'], ...
-                                  obj.depletion_streak, obj.update_count, obj.severe_count);
-                        end
-                    else
-                        obj.depletion_streak = 0;
+                    if N_eff / obj.Np < 0.05
+                        epoch_severe_flag = true;
                     end
-                    
-                    % 若还有后续批次，先提取当前后验均值再重采样与微抖动
                     obj.resample_and_roughen(w_norm);
-                else
-                    obj.depletion_streak = 0;
                 end
+            end
+            
+            % 按完整 UWB 更新历元统计连续严重贫化次数
+            if epoch_severe_flag
+                obj.severe_count     = obj.severe_count + 1;
+                obj.depletion_streak = obj.depletion_streak + 1;
+                if obj.depletion_streak > obj.depletion_streak_limit
+                    error('CPF:SevereParticleDepletion', ...
+                          ['连续 %d 次历元出现粒子严重贫化警告 (UWB 更新序号 %d, 累计 %d 次)，' ...
+                           '已终止本次运行以便调整参数。'], ...
+                          obj.depletion_streak, obj.update_count, obj.severe_count);
+                end
+            else
+                obj.depletion_streak = 0;
             end
             
             % --- 3. 提取最终后验状态估计 (式 19-21) ---
@@ -272,6 +304,10 @@ classdef CPF < handle
         function resample_and_roughen(obj, w_norm)
             obj.resample_count = obj.resample_count + 1;
             Np_curr = obj.Np;
+            
+            % [关键修复] 在重采样复制之前，先计算当前粒子云的散布标准差！
+            std_p_pre = std(obj.P_p, 0, 2);
+            std_v_pre = std(obj.P_v, 0, 2);
             
             % A. 系统重采样 (Systematic Resampling, 式 23-24)
             c = cumsum(w_norm(:));
@@ -290,17 +326,13 @@ classdef CPF < handle
             obj.P_R    = obj.P_R(:, :, :, idx);
             obj.P_logw = log(1 / Np_curr) * ones(1, Np_curr);
             
-            % B. 自适应微抖动 (Roughening，防止多批次重采样时粒子坍缩为单点)
+            % B. 自适应微抖动 (Roughening)
             if obj.rough_coeff > 0 || obj.min_pos_jitter > 0 || obj.min_vel_jitter > 0 || obj.min_att_jitter > 0
-                % 位置与速度抖动
-                std_p = std(obj.P_p, 0, 2);
-                std_v = std(obj.P_v, 0, 2);
-                jit_p = obj.rough_coeff * std_p + obj.min_pos_jitter;
-                jit_v = obj.rough_coeff * std_v + obj.min_vel_jitter;
+                jit_p = min(0.2, obj.rough_coeff * std_p_pre + obj.min_pos_jitter);
+                jit_v = min(0.2, obj.rough_coeff * std_v_pre + obj.min_vel_jitter);
                 obj.P_p = obj.P_p + jit_p .* randn(size(obj.P_p));
                 obj.P_v = obj.P_v + jit_v .* randn(size(obj.P_v));
                 
-                % SO(3) 姿态流形抖动
                 for v_idx = 1:obj.Vehicle_num
                     R_sum = sum(obj.P_R(:, :, v_idx, :), 4);
                     [U, ~, V] = svd(R_sum);
@@ -328,13 +360,11 @@ classdef CPF < handle
             % 计算加权后验均值与 SO(3) 正交投影均值 (式 19-21)
             max_logw = max(obj.P_logw);
             w_norm   = exp(obj.P_logw - max_logw);
-            w_norm   = w_norm(:) / sum(w_norm); % Np x 1
+            w_norm   = w_norm(:) / sum(w_norm);
             
-            % 位置与速度加权平均 (式 19)
             obj.p = obj.P_p * w_norm;
             obj.v = obj.P_v * w_norm;
             
-            % 旋转矩阵加权平均与 SVD 正交投影 (式 20-21)
             for i = 1:obj.Vehicle_num
                 R_i_all = reshape(obj.P_R(:, :, i, :), 9, obj.Np);
                 R_bar   = reshape(R_i_all * w_norm, 3, 3);
