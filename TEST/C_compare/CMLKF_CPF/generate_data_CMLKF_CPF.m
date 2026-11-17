@@ -16,9 +16,9 @@ if mod(dt_uwb, dt_imu) ~= 0
 end
 
 % --- 仿真时间与批次配置 ---
-t_end = 45;                  % 每个批次的仿真时长 (s)
+t_end = 50;                  % 每个批次的仿真时长 (s)
 N_steps = round(t_end / dt_imu) + 1;
-repeat_time = 3;             % 生成的独立批次数量
+repeat_time = 5;             % 生成的独立批次数量
 N_steps_total = N_steps * repeat_time;
 
 % --- 实体数量配置 ---
@@ -29,7 +29,7 @@ if Anchor_num < 4 || Anchor_num > 40,   error('Anchor_num 必须在 [4, 40] 范�
 if repeat_time < 1 || round(repeat_time) ~= repeat_time, error('repeat_time 必须是正整数。'); end
 
 % --- 文件标识与随机种子配置 (核心修改点) ---
-dataset_id = 'CMLKF_CPF_45_3';          % 文件名后缀 ID，用于标识数据集
+dataset_id = 'CMLKF_CPF_50_5';          % 文件名后缀 ID，用于标识数据集
 % 使用基于时间的随机种子，确保每次运行哪怕 dataset_id 相同，生成的数据也完全不同
 rng('shuffle');              
 rng_state = rng;
