@@ -12,6 +12,7 @@ clc; clear; close all;
 Vehicle_num    = 3;
 Anchor_num     = 8;             % 数据集中的总基站数
 Anchor_run_num = 8;           % 待测试的基站数量 (可为列表如 5:15 或单个数如 10)
+neighbor_num   = 2;              % 每辆车的相对测距邻居数量 (取值范围: 0 ~ Vehicle_num-1)
 dataset_id     = 'CMLKF_CPF_20_1';
 
 run_flag    = 1;          % 当前脚本暂不读取历史结果
@@ -48,6 +49,15 @@ if isempty(Anchor_run_num) || any(Anchor_run_num < 1) || ...
         any(Anchor_run_num > Anchor_num) || any(round(Anchor_run_num) ~= Anchor_run_num)
     error('Anchor_run_num 必须是 [1, %d] 范围内的正整数或正整数列表。', Anchor_num);
 end
+
+% 校验 neighbor_num 合法性并生成相对测距掩码
+if isempty(neighbor_num) || ~isscalar(neighbor_num) || ...
+        neighbor_num < 0 || neighbor_num > Vehicle_num - 1 || ...
+        round(neighbor_num) ~= neighbor_num
+    error('neighbor_num 必须是 [0, %d] 范围内的整数。', Vehicle_num - 1);
+end
+rel_mask = build_rel_mask(Vehicle_num, neighbor_num);
+
 
 fprintf('\n========== 开始运行 CEKF、CMLKF 与 CPF 算法对比 ==========\n');
 fprintf('目标数据集: 车辆 %d, 数据集总基站 %d, 测试基站数: [%s], 后缀标识: %s\n', ...
@@ -157,7 +167,7 @@ for a_idx = 1:num_anc_configs
         
         % CEKF
         CEKF_batch_veh_rmse(r, :) = run_filter('CEKF', trajectories, batch_anchors, ...
-            anchor_mask, N_steps_use, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
+            anchor_mask, rel_mask, N_steps_use, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
             attitude_std_deg, initial_position_error, ...
             cml_max_iter, cml_epsilon, cml_beta_inv, cml_max_step, ...
             cpf_params, batch_seed, ...
@@ -166,7 +176,7 @@ for a_idx = 1:num_anc_configs
         
         % CMLKF
         CMLKF_batch_veh_rmse(r, :) = run_filter('CMLKF', trajectories, batch_anchors, ...
-            anchor_mask, N_steps_use, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
+            anchor_mask, rel_mask, N_steps_use, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
             attitude_std_deg, initial_position_error, ...
             cml_max_iter, cml_epsilon, cml_beta_inv, cml_max_step, ...
             cpf_params, batch_seed, ...
@@ -175,7 +185,7 @@ for a_idx = 1:num_anc_configs
         
         % CPF
         CPF_batch_veh_rmse(r, :) = run_filter('CPF', trajectories, batch_anchors, ...
-            anchor_mask, N_steps_use, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
+            anchor_mask, rel_mask, N_steps_use, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
             attitude_std_deg, initial_position_error, ...
             cml_max_iter, cml_epsilon, cml_beta_inv, cml_max_step, ...
             cpf_params, batch_seed, ...
@@ -296,7 +306,7 @@ function batch_trajectories = extract_batch(trajectories, batch_id, ...
 end
 
 function veh_rmse = run_filter(method_name, trajectories, anchors, ...
-        anchor_mask, N_steps, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
+        anchor_mask, rel_mask, N_steps, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
         attitude_std_deg, initial_position_error, ...
         cml_max_iter, cml_epsilon, cml_beta_inv, cml_max_step, ...
         cpf_params, batch_seed, ...
@@ -384,7 +394,8 @@ function veh_rmse = run_filter(method_name, trajectories, anchors, ...
             end
             % 统一应用基站数量掩码 (未启用的基站观测置为 NaN)
             uwb_anc(:, ~anchor_mask) = NaN;
-            
+            uwb_rel(~rel_mask)       = NaN;
+
             kf.update(uwb_anc, uwb_rel);
             uwb_idx = uwb_idx + 1;
         end
@@ -439,4 +450,36 @@ function initialize_filter_prior(kf, method_name, prior_std_vec, ...
         prior_blocks = repmat({prior_block}, 1, kf.Vehicle_num);
         kf.Sigma = blkdiag(prior_blocks{:});
     end
+end
+
+function rel_mask = build_rel_mask(Vehicle_num, neighbor_num)
+    % 构建车间相对测距逻辑掩码 (Vehicle_num x Vehicle_num)
+    % 保证每辆车严格拥有 neighbor_num 个有效相对测距邻居，且全网出度/入度均为 neighbor_num
+    rel_mask = false(Vehicle_num, Vehicle_num);
+    if neighbor_num == 0
+        return;
+    end
+
+    K_half = floor(neighbor_num / 2);
+    for i = 1:Vehicle_num
+        % 1. 对称连接前后各 K_half 个邻居
+        for d = 1:K_half
+            idx_fwd = mod(i + d - 1, Vehicle_num) + 1;
+            idx_bwd = mod(i - d - 1, Vehicle_num) + 1;
+            rel_mask(i, idx_fwd) = true;
+            rel_mask(i, idx_bwd) = true;
+        end
+        % 2. 若 neighbor_num 为奇数：
+        %    - 当 Vehicle_num 为偶数时，连接圆环正对面节点 (保持无向对称)
+        %    - 当 Vehicle_num 为奇数时，向前多连第 K_half+1 个节点 (构成旋转对称闭环)
+        if mod(neighbor_num, 2) ~= 0
+            if mod(Vehicle_num, 2) == 0
+                idx_extra = mod(i + Vehicle_num/2 - 1, Vehicle_num) + 1;
+            else
+                idx_extra = mod(i + K_half, Vehicle_num) + 1;
+            end
+            rel_mask(i, idx_extra) = true;
+        end
+    end
+    rel_mask(1:Vehicle_num+1:end) = false; % 强制自身对自身为 false
 end
