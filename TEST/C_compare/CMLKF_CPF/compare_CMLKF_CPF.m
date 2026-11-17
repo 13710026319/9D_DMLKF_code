@@ -9,23 +9,23 @@
 clc; clear; close all;
 
 %% ==================== 1. 测试参数配置 ====================
-Vehicle_num    = 4;
-Anchor_num     = 16;             % 数据集中的总基站数
-Anchor_run_num = 3:10;           % 待测试的基站数量 (可为列表如 5:15 或单个数如 10)
-dataset_id     = 'CMLKF_CPF_20_3';
+Vehicle_num    = 3;
+Anchor_num     = 8;             % 数据集中的总基站数
+Anchor_run_num = 8;           % 待测试的基站数量 (可为列表如 5:15 或单个数如 10)
+dataset_id     = 'CMLKF_CPF_20_1';
 
 run_flag    = 1;          % 当前脚本暂不读取历史结果
-save_flag   = 0;          % 暂时不保存结果 (设为 1 则保存至 CSV)
-figure_save = 0;          % 暂时不保存图片
+save_flag   = 0;          % 1: 保存结果至 CSV; 0: 不保存
+figure_save = 0;          % 1: 保存图片至 PNG; 0: 仅显示不保存
 
 bias_comp_ratio = 1.0;    % 1.0 表示完全补偿 IMU 零偏
 data_ratio      = 1.0;    % 每个批次使用的数据比例
 
 % --- CMLKF 参数 ---
-cml_max_iter = 60;
+cml_max_iter = 30;
 cml_epsilon  = 1e-6;
 cml_beta_inv = 100;
-cml_max_step = Inf;
+cml_max_step = 1;
 
 % --- CPF 参数 ---
 rng_base_seed = 20261028;
@@ -69,11 +69,12 @@ addpath(fullfile(repo_root, 'EKF', 'CEKF'));
 addpath(fullfile(repo_root, 'MLKF', 'CMLKF'));
 addpath(fullfile(repo_root, 'PF', 'CPF'));
 
+base_result_name = sprintf('%s_Veh%d_Anc%d_to_%d', ...
+    dataset_id, Vehicle_num, Anchor_run_num(1), Anchor_run_num(end));
 data_file   = fullfile(data_dir, sprintf( ...
     'Trj_Veh%d_Anc%d_%s.mat', Vehicle_num, Anchor_num, dataset_id));
-result_file = fullfile(result_dir, sprintf( ...
-    '%s_Veh%d_Anc%d_to_%d.csv', dataset_id, Vehicle_num, ...
-    Anchor_run_num(1), Anchor_run_num(end)));
+result_file = fullfile(result_dir, [base_result_name, '.csv']);
+figure_file = fullfile(result_dir, [base_result_name, '.png']);
 
 if run_flag ~= 1
     error('当前版本仅支持 run_flag=1。');
@@ -212,7 +213,7 @@ for a_idx = 1:num_anc_configs
     fprintf('===================================================\n');
 end
 
-%% ==================== 5. 汇总结果输出与保存 ====================
+%% ==================== 5. 汇总结果输出、保存与绘图 ====================
 if num_anc_configs > 1
     fprintf('\n================ 基站数量变化下三算法最终 RMSE 汇总 (单位: m) ================\n');
     fprintf(' Anchor Num |    CEKF    |   CMLKF    |    CPF     \n');
@@ -235,7 +236,38 @@ if save_flag
     fprintf('---> 结果摘要数据已成功保存至:\n%s\n', result_file);
 end
 
+% 绘制并显示 RMSE 随基站数量变化曲线 (无论 figure_save 是否为 1 均显示图片)
+plot_anchor_rmse(Anchor_run_num, summary_CPF, summary_CMLKF, summary_CEKF, ...
+    figure_save, figure_file);
+
 %% ======================= 局部函数区域 =======================
+function plot_anchor_rmse(anchor_nums, rmse_pf, rmse_mlkf, rmse_ekf, ...
+        figure_save, figure_file)
+    % 绘制不同基站数量下 PF、MLKF、EKF 的 RMSE 对比图 (无标题)
+    figure('Name', 'RMSE vs Anchor Number', 'Position', [150, 150, 720, 480], ...
+        'Color', 'w', 'Visible', 'on');
+    hold on; grid on; box on;
+
+    plot(anchor_nums, rmse_pf,   '-s', 'LineWidth', 1.8, 'MarkerSize', 7, 'DisplayName', 'PF');
+    plot(anchor_nums, rmse_mlkf, '-o', 'LineWidth', 1.8, 'MarkerSize', 7, 'DisplayName', 'MLKF');
+    plot(anchor_nums, rmse_ekf,  '-^', 'LineWidth', 1.8, 'MarkerSize', 7, 'DisplayName', 'EKF');
+
+    xticks(anchor_nums);
+    if numel(anchor_nums) > 1
+        xlim([min(anchor_nums), max(anchor_nums)]);
+    end
+    xlabel('Anchor Number');
+    ylabel('RMSE');
+    legend('Location', 'best');
+    hold off;
+    drawnow;
+
+    if figure_save
+        exportgraphics(gcf, figure_file, 'Resolution', 300);
+        fprintf('---> 对比曲线图片已成功保存至:\n%s\n', figure_file);
+    end
+end
+
 function batch_trajectories = extract_batch(trajectories, batch_id, ...
         N_steps, N_uwb_per_batch)
     % 从完整多批次轨迹数据中截取指定单批次数据。
