@@ -9,10 +9,10 @@
 clc; clear; close all;
 
 %% ==================== 1. 测试参数配置 ====================
-Vehicle_num    = 3;
-Anchor_num     = 20;             % 数据集中的总基站数
-Anchor_run_num = 20;           % 待测试的基站数量 (可为列表如 5:15 或单个数如 10)
-dataset_id     = 'CMLKF_CPF_40_3';
+Vehicle_num    = 4;
+Anchor_num     = 16;             % 数据集中的总基站数
+Anchor_run_num = 3:10;           % 待测试的基站数量 (可为列表如 5:15 或单个数如 10)
+dataset_id     = 'CMLKF_CPF_20_3';
 
 run_flag    = 1;          % 当前脚本暂不读取历史结果
 save_flag   = 0;          % 暂时不保存结果 (设为 1 则保存至 CSV)
@@ -23,7 +23,7 @@ data_ratio      = 1.0;    % 每个批次使用的数据比例
 
 % --- CMLKF 参数 ---
 cml_max_iter = 60;
-cml_epsilon  = 1e-8;
+cml_epsilon  = 1e-6;
 cml_beta_inv = 100;
 cml_max_step = Inf;
 

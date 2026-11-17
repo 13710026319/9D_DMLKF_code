@@ -11,8 +11,8 @@ Anchor_num      = 12;
 Anchor_data_num = 4:12;  % 测试使用的基站数量，可以是标量(如10)或向量(如4:12)
 dataset_id      = 'CEKF_CMLKF_CIEKF_30_5'; 
 
-save_flag       = 1;     % 1: 保存汇总表(CSV)与对比图(PNG); 0: 不保存
-run_flag        = 0;     % 1: 运行实验; 0: 仅读取已有结果并打印、绘图
+save_flag       = 0;     % 1: 保存汇总表(CSV)与对比图(PNG); 0: 不保存
+run_flag        = 1;     % 1: 运行实验; 0: 仅读取已有结果并打印、绘图
 
 % --- 算法端与滤波器相关参数 ---
 bias_comp_ratio    = 1;   % 1.0 表示完全补偿 IMU 零偏
