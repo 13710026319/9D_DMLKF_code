@@ -220,21 +220,34 @@ classdef CIEKF < handle
                 R_UWB = spdiags(R_uwb_diag, 0, length(y_meas), length(y_meas));
                 
                 S = H_mat * Sigma_prior * H_mat' + R_UWB;
-                K = (Sigma_prior * H_mat') / S;
+                S = (S + S') / 2;
+                reg_S = max(1e-4, 1e-5 * (trace(S) / length(y_meas)));
+                S_reg = S + reg_S * eye(length(y_meas));
+                K = (Sigma_prior * H_mat') / S_reg;
                 
-                % 4. 欧氏空间高斯-牛顿更新步长
+                % 4. 欧氏空间高斯-牛顿更新步长 (带 LM 阻尼与防发散限幅)
                 Delta_x = K * (r_vec + H_mat * dx_diff) - dx_diff;
+                if any(isnan(Delta_x)) || any(isinf(Delta_x))
+                    Delta_x = zeros(size(Delta_x));
+                end
                 
-                % 5. 纯欧氏向量加法更新工作状态
+                % 5. 纯欧氏向量加法更新工作状态 (限制单步最大位置/欧拉角跨度防止冲入死锁)
                 for i = 1:obj.Vehicle_num
                     idx_p   = 9*(i-1) + (1:3);
                     idx_v   = 9*(i-1) + (4:6);
                     idx_eta = 9*(i-1) + (7:9);
                     idx_3   = 3*i-2 : 3*i;
                     
-                    p_op(idx_3)   = p_op(idx_3)   + Delta_x(idx_p);
-                    v_op(idx_3)   = v_op(idx_3)   + Delta_x(idx_v);
-                    eta_op(idx_3) = CIEKF.wrap_euler(eta_op(idx_3) + Delta_x(idx_eta));
+                    dp   = Delta_x(idx_p);
+                    dv   = Delta_x(idx_v);
+                    deta = Delta_x(idx_eta);
+                    if norm(dp) > 1.0,   dp   = dp   * (1.0 / norm(dp));   end
+                    if norm(dv) > 2.0,   dv   = dv   * (2.0 / norm(dv));   end
+                    if norm(deta) > 0.3, deta = deta * (0.3 / norm(deta)); end
+                    
+                    p_op(idx_3)   = p_op(idx_3) + dp;
+                    v_op(idx_3)   = v_op(idx_3) + dv;
+                    eta_op(idx_3) = CIEKF.wrap_euler(eta_op(idx_3) + deta);
                 end
                 
                 % 6. 收敛判断
@@ -286,8 +299,9 @@ classdef CIEKF < handle
             phi = eta(1); th = eta(2);
             cp = cos(phi); sp = sin(phi);
             ct = cos(th);  st = sin(th);
-            if abs(ct) < 1e-4
-                ct = sign(ct + eps) * 1e-4; % 万向节死锁奇异保护
+            % 万向节死锁区安全截断保护 (牺牲大仰角精度换取数值稳定，防止 1/ct 爆炸)
+            if abs(ct) < 0.25
+                ct = sign(ct + eps) * 0.25;
             end
             tt = st / ct;
             T = [1, sp * tt,  cp * tt;
@@ -318,12 +332,11 @@ classdef CIEKF < handle
         end
         
         function J_euler = dT_w_deta(eta, w)
-            % 计算 d(T(eta)*w) / d(eta) 的 3x3 解析欧氏偏导矩阵
             phi = eta(1); th = eta(2);
             cp = cos(phi); sp = sin(phi);
             ct = cos(th);  st = sin(th);
-            if abs(ct) < 1e-4
-                ct = sign(ct + eps) * 1e-4;
+            if abs(ct) < 0.25
+                ct = sign(ct + eps) * 0.25;
             end
             tt = st / ct;
             wy = w(2); wz = w(3);
@@ -345,7 +358,8 @@ classdef CIEKF < handle
         
         function eta = wrap_euler(eta)
             eta(1) = mod(eta(1) + pi, 2*pi) - pi;
-            eta(2) = max(-pi/2 + 1e-4, min(pi/2 - 1e-4, eta(2)));
+            % 限制俯仰角在 [-75°, +75°] 安全区内，防止欧氏滤波器触发 pi/2 奇异崩溃
+            eta(2) = max(-deg2rad(75), min(deg2rad(75), eta(2)));
             eta(3) = mod(eta(3) + pi, 2*pi) - pi;
         end
     end

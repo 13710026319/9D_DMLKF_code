@@ -1,49 +1,40 @@
 % compare_C_4_alg.m
 % 在同一组多批次数据上比较 CEKF、CIEKF、CMLKF 和 CPF 在不同基站数量下的位置 RMSE。
 % 四个算法共享相同的初始状态误差、基站观测掩码、车间相对测距掩码和输入测量。
-% RMSE 计算逻辑：
-% 1. 单车全程均方根：先计算每辆车在每个时刻的误差平方，在时间轴求平均后开根号；
-% 2. 多批次平均：将每辆车的全程 RMSE 在各批次上求均值；
-% 3. 算法最终平均：将各车的多批次平均 RMSE 再次求均值，得到最终评价指标。
 
 clc; clear; close all;
 
 %% ==================== 1. 测试参数配置 ====================
 Vehicle_num    = 1;
-Anchor_num     = 16;             % 数据集中的总基站数
-Anchor_run_num = 4:12;           % 待测试的基站数量 (可为列表如 4:12 或单个数如 10)
+Anchor_num     = 12;             % 数据集中的总基站数
+Anchor_run_num = 7;           % 待测试的基站数量 (可为列表如 4:12 或单个数如 10)
 neighbor_num   = 0;              % 每辆车的相对测距邻居数量 (取值范围: 0 ~ Vehicle_num-1)
 Anchor_mark    = 0;              % 0: Anchor_run_num表示每车基站数; 1: 表示全网所有车的总基站测距条数
-dataset_id     = 'C_4_alg_50_A';
+dataset_id     = 'C_4_alg_40_4';
 
-run_flag    = 0;          % 1: 重新运行滤波实验; 0: 直接读取已有 CSV 结果打印并作图
-save_flag   = 1;          % 1: 保存结果至 CSV; 0: 不保存
-figure_save = 1;          % 1: 保存图片至 PNG; 0: 仅显示不保存
+run_flag    = 1;          % 1: 重新运行滤波实验; 0: 直接读取已有 CSV 结果打印并作图
+save_flag   = 0;          % 1: 保存结果至 CSV; 0: 不保存
+figure_save = 0;          % 1: 保存图片至 PNG; 0: 仅显示不保存
 
 bias_comp_ratio = 1.0;    % 1.0 表示完全补偿 IMU 零偏
 data_ratio      = 1.0;    % 每个批次使用的数据比例
 
 % --- CMLKF 参数 ---
-cml_max_iter = 30;
+cml_max_iter = 10;
 cml_epsilon  = 1e-6;
-cml_beta_inv = 100;
+cml_beta_inv = 1;         
 cml_max_step = 1;
 
 % --- CIEKF 参数 ---
-iekf_max_iter = 30;
+iekf_max_iter = 10;
 
 % --- CPF 参数 ---
-rng_base_seed = 20261118;
-% cpf_params.num_particles          = 1500;
-% cpf_params.neff_ratio             = 0.5; % 重采样频率阈值
-% cpf_params.temper_ess_ratio       = 0.8; % 退火步长 ESS 阈值
-% cpf_params.n_mcmc                 = 10;  % 每个退火阶段 MH 次数
-cpf_params.depletion_streak_limit = 3;
-
-cpf_params.num_particles          = 1500;
-cpf_params.neff_ratio             = 0.5; % 重采样频率阈值
+rng_base_seed = 20261028;
+cpf_params.num_particles          = 1000;
+cpf_params.neff_ratio             = 0.6; % 重采样频率阈值
 cpf_params.temper_ess_ratio       = 0.8; % 退火步长 ESS 阈值
 cpf_params.n_mcmc                 = 10;  % 每个退火阶段 MH 次数
+cpf_params.depletion_streak_limit = 3;
 
 % --- 参数合法性校验 ---
 Anchor_run_num = Anchor_run_num(:)';
@@ -139,9 +130,17 @@ repeat_count = round(repeat_count);
 N_steps_use     = max(2, round(S.N_steps * data_ratio));
 N_uwb_per_batch = size(S.trajectories.V1.UWB_Anchor, 1) / repeat_count;
 
-prior_std_vec      = S.scenario.position_prior_std_vec;
-velocity_prior_std = 0.1;
-attitude_std_deg   = 1.0;
+prior_std_vec = S.scenario.position_prior_std_vec;
+if isfield(S.scenario, 'velocity_prior_std')
+    velocity_prior_std = S.scenario.velocity_prior_std;
+else
+    velocity_prior_std = 0.2;
+end
+if isfield(S.scenario, 'attitude_prior_std_deg')
+    attitude_std_deg = S.scenario.attitude_prior_std_deg;
+else
+    attitude_std_deg = 10.0;
+end
 
 % 四个算法统一使用数据文件中的真值 IMU/UWB 噪声参数
 ekf_imu_sigma_a   = S.IMU_noise_params.sigma_na^2 * eye(3);
@@ -198,12 +197,22 @@ for a_idx = 1:num_anc_configs
         trajectories           = extract_batch(S.trajectories, r, S.N_steps, N_uwb_per_batch);
         batch_anchors          = S.anchors_all(:, :, r);
         initial_position_error = S.scenario.initial_position_error(:, :, r);
-        batch_seed             = rng_base_seed + r - 1;
+        if isfield(S.scenario, 'initial_velocity_error')
+            initial_velocity_error = S.scenario.initial_velocity_error(:, :, r);
+        else
+            initial_velocity_error = zeros(3, Vehicle_num);
+        end
+        if isfield(S.scenario, 'initial_attitude_error')
+            initial_attitude_error = S.scenario.initial_attitude_error(:, :, r);
+        else
+            initial_attitude_error = zeros(3, Vehicle_num);
+        end
+        batch_seed = rng_base_seed + r - 1;
         
         % CEKF
         CEKF_batch_veh_rmse(r, :) = run_filter('CEKF', trajectories, batch_anchors, ...
             anchor_mask, rel_mask, N_steps_use, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
-            attitude_std_deg, initial_position_error, ...
+            attitude_std_deg, initial_position_error, initial_velocity_error, initial_attitude_error, ...
             cml_max_iter, cml_epsilon, cml_beta_inv, cml_max_step, ...
             iekf_max_iter, cpf_params, batch_seed, ...
             ekf_imu_sigma_a, ekf_imu_sigma_w, ekf_uwb_sigma_anc, ekf_uwb_sigma_rel);
@@ -211,7 +220,7 @@ for a_idx = 1:num_anc_configs
         % CIEKF
         CIEKF_batch_veh_rmse(r, :) = run_filter('CIEKF', trajectories, batch_anchors, ...
             anchor_mask, rel_mask, N_steps_use, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
-            attitude_std_deg, initial_position_error, ...
+            attitude_std_deg, initial_position_error, initial_velocity_error, initial_attitude_error, ...
             cml_max_iter, cml_epsilon, cml_beta_inv, cml_max_step, ...
             iekf_max_iter, cpf_params, batch_seed, ...
             ekf_imu_sigma_a, ekf_imu_sigma_w, ekf_uwb_sigma_anc, ekf_uwb_sigma_rel);
@@ -219,7 +228,7 @@ for a_idx = 1:num_anc_configs
         % CMLKF
         CMLKF_batch_veh_rmse(r, :) = run_filter('CMLKF', trajectories, batch_anchors, ...
             anchor_mask, rel_mask, N_steps_use, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
-            attitude_std_deg, initial_position_error, ...
+            attitude_std_deg, initial_position_error, initial_velocity_error, initial_attitude_error, ...
             cml_max_iter, cml_epsilon, cml_beta_inv, cml_max_step, ...
             iekf_max_iter, cpf_params, batch_seed, ...
             ekf_imu_sigma_a, ekf_imu_sigma_w, ekf_uwb_sigma_anc, ekf_uwb_sigma_rel);
@@ -227,7 +236,7 @@ for a_idx = 1:num_anc_configs
         % CPF
         CPF_batch_veh_rmse(r, :) = run_filter('CPF', trajectories, batch_anchors, ...
             anchor_mask, rel_mask, N_steps_use, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
-            attitude_std_deg, initial_position_error, ...
+            attitude_std_deg, initial_position_error, initial_velocity_error, initial_attitude_error, ...
             cml_max_iter, cml_epsilon, cml_beta_inv, cml_max_step, ...
             iekf_max_iter, cpf_params, batch_seed, ...
             ekf_imu_sigma_a, ekf_imu_sigma_w, ekf_uwb_sigma_anc, ekf_uwb_sigma_rel);
@@ -290,7 +299,6 @@ end
 
 function plot_anchor_rmse(anchor_nums, rmse_pf, rmse_mlkf, rmse_iekf, rmse_ekf, ...
         figure_save, figure_file)
-    % 绘制不同基站数量下 PF、MLKF、IEKF、EKF 的 RMSE 对比图 (无标题)
     figure('Name', 'RMSE vs Anchor Number', 'Position', [150, 150, 720, 480], ...
         'Color', 'w', 'Visible', 'on');
     hold on; grid on; box on;
@@ -311,14 +319,12 @@ function plot_anchor_rmse(anchor_nums, rmse_pf, rmse_mlkf, rmse_iekf, rmse_ekf, 
     drawnow;
 
     if figure_save
-        exportgraphics(gcf, figure_file, 'Resolution', 300);
+        saveas(gcf, figure_file);
         fprintf('---> 对比曲线图片已成功保存至:\n%s\n', figure_file);
     end
 end
 
 function rel_mask = build_rel_mask(Vehicle_num, neighbor_num)
-    % 构建车间相对测距逻辑掩码 (Vehicle_num x Vehicle_num)
-    % 保证每辆车严格拥有 neighbor_num 个有效相对测距邻居，且全网出度/入度均为 neighbor_num
     rel_mask = false(Vehicle_num, Vehicle_num);
     if neighbor_num == 0
         return;
@@ -372,7 +378,7 @@ end
 
 function veh_rmse = run_filter(method_name, trajectories, anchors, ...
         anchor_mask, rel_mask, N_steps, bias_comp_ratio, prior_std_vec, velocity_prior_std, ...
-        attitude_std_deg, initial_position_error, ...
+        attitude_std_deg, initial_position_error, initial_velocity_error, initial_attitude_error, ...
         cml_max_iter, cml_epsilon, cml_beta_inv, cml_max_step, ...
         iekf_max_iter, cpf_params, batch_seed, ...
         ekf_imu_sigma_a, ekf_imu_sigma_w, ...
@@ -393,8 +399,10 @@ function veh_rmse = run_filter(method_name, trajectories, anchors, ...
                          initial_position_error(:, i);
         v0(3*i-2:3*i) = [trajectories.(name).Vx_true(1); ...
                          trajectories.(name).Vy_true(1); ...
-                         trajectories.(name).Vz_true(1)];
-        R0(:, :, i) = trajectories.(name).R_true(:, :, 1);
+                         trajectories.(name).Vz_true(1)] + ...
+                         initial_velocity_error(:, i);
+        R0(:, :, i)   = trajectories.(name).R_true(:, :, 1) * ...
+                        CMLKF.exp_SO3(initial_attitude_error(:, i));
     end
     
     switch method_name
