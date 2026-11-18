@@ -16,20 +16,20 @@ if mod(dt_uwb, dt_imu) ~= 0
 end
 
 % --- 仿真时间与批次配置 ---
-t_end = 50;                  % 每个批次的仿真时长 (s)
+t_end = 40;                  % 每个批次的仿真时长 (s)
 N_steps = round(t_end / dt_imu) + 1;
-repeat_time = 5;             % 生成的独立批次数量
+repeat_time = 3;             % 生成的独立批次数量
 N_steps_total = N_steps * repeat_time;
 
 % --- 实体数量配置 ---
-Vehicle_num = 1;             % 车辆/无人机数量 [1, 12]
-Anchor_num  = 16;            % UWB基站数量 [4, 40]
+Vehicle_num = 2;             % 车辆/无人机数量 [1, 12]
+Anchor_num  = 12;            % UWB基站数量 [4, 40]
 if Vehicle_num < 1 || Vehicle_num > 12, error('Vehicle_num 必须在 [1, 12] 范围内。'); end
 if Anchor_num < 4 || Anchor_num > 40,   error('Anchor_num 必须在 [4, 40] 范围内。'); end
 if repeat_time < 1 || round(repeat_time) ~= repeat_time, error('repeat_time 必须是正整数。'); end
 
 % --- 文件标识与随机种子配置 (核心修改点) ---
-dataset_id = 'CMLKF_CPF_50_5';          % 文件名后缀 ID，用于标识数据集
+dataset_id = 'CMLKF_CPF_40_3';          % 文件名后缀 ID，用于标识数据集
 % 使用基于时间的随机种子，确保每次运行哪怕 dataset_id 相同，生成的数据也完全不同
 rng('shuffle');              
 rng_state = rng;

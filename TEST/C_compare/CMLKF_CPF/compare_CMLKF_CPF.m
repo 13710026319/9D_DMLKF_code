@@ -9,13 +9,14 @@
 clc; clear; close all;
 
 %% ==================== 1. 测试参数配置 ====================
-Vehicle_num    = 1;
-Anchor_num     = 16;             % 数据集中的总基站数
-Anchor_run_num = 4:12;           % 待测试的基站数量 (可为列表如 4:12 或单个数如 10)
+Vehicle_num    = 2;
+Anchor_num     = 12;             % 数据集中的总基站数
+Anchor_run_num = 6:16;           % 待测试的基站数量 (可为列表如 4:12 或单个数如 10)
 neighbor_num   = 0;              % 每辆车的相对测距邻居数量 (取值范围: 0 ~ Vehicle_num-1)
-dataset_id     = 'CMLKF_CPF_50_5';
+Anchor_mark    = 1;              % 0: Anchor_run_num表示每车基站数; 1: 表示全网所有车的总基站测距条数
+dataset_id     = 'CMLKF_CPF_40_3';
 
-run_flag    = 0;          % 1: 重新运行滤波实验; 0: 直接读取已有 CSV 结果打印并作图
+run_flag    = 1;          % 1: 重新运行滤波实验; 0: 直接读取已有 CSV 结果打印并作图
 save_flag   = 1;          % 1: 保存结果至 CSV; 0: 不保存
 figure_save = 1;          % 1: 保存图片至 PNG; 0: 仅显示不保存
 
@@ -38,9 +39,18 @@ cpf_params.depletion_streak_limit = 3;
 
 % --- 参数合法性校验 ---
 Anchor_run_num = Anchor_run_num(:)';
+if ~ismember(Anchor_mark, [0, 1])
+    error('Anchor_mark 必须为 0 或 1。');
+end
+if Anchor_mark == 0
+    max_anc_limit = Anchor_num;
+else
+    max_anc_limit = Vehicle_num * Anchor_num;
+end
 if isempty(Anchor_run_num) || any(Anchor_run_num < 1) || ...
-        any(Anchor_run_num > Anchor_num) || any(round(Anchor_run_num) ~= Anchor_run_num)
-    error('Anchor_run_num 必须是 [1, %d] 范围内的正整数或正整数列表。', Anchor_num);
+        any(Anchor_run_num > max_anc_limit) || any(round(Anchor_run_num) ~= Anchor_run_num)
+    error('当前 Anchor_mark=%d 下，Anchor_run_num 必须是 [1, %d] 范围内的正整数或列表。', ...
+        Anchor_mark, max_anc_limit);
 end
 if isempty(neighbor_num) || ~isscalar(neighbor_num) || ...
         neighbor_num < 0 || neighbor_num > Vehicle_num - 1 || ...
@@ -141,11 +151,27 @@ summary_CPF     = zeros(num_anc_configs, 1);
 for a_idx = 1:num_anc_configs
     curr_anc_num = Anchor_run_num(a_idx);
     fprintf('\n-----------------------------------------------------------\n');
-    fprintf('>>> 正在测试基站数量: %d / %d (进度: %d/%d) <<<\n', ...
-        curr_anc_num, Anchor_num, a_idx, num_anc_configs);
-
-    anchor_mask = false(1, Anchor_num);
-    anchor_mask(1:curr_anc_num) = true;
+    
+    % 构建 Vehicle_num x Anchor_num 的二维基站观测掩码
+    anchor_mask = false(Vehicle_num, Anchor_num);
+    if Anchor_mark == 0
+        % 模式 0：每辆车均取前 curr_anc_num 个基站
+        anchor_mask(:, 1:curr_anc_num) = true;
+        fprintf('>>> 正在测试每车基站数量: %d / %d (进度: %d/%d) <<<\n', ...
+            curr_anc_num, Anchor_num, a_idx, num_anc_configs);
+    else
+        % 模式 1：curr_anc_num 为全网总基站测距数，均分给各车，余数按顺序分给前 rem_cnt 辆车
+        base_cnt = floor(curr_anc_num / Vehicle_num);
+        rem_cnt  = mod(curr_anc_num, Vehicle_num);
+        for v_i = 1:Vehicle_num
+            v_anc_cnt = base_cnt + (v_i <= rem_cnt);
+            if v_anc_cnt > 0
+                anchor_mask(v_i, 1:v_anc_cnt) = true;
+            end
+        end
+        fprintf('>>> 正在测试全网总基站测距数: %d / %d (进度: %d/%d) <<<\n', ...
+            curr_anc_num, Vehicle_num * Anchor_num, a_idx, num_anc_configs);
+    end
 
     CEKF_batch_veh_rmse  = zeros(repeat_count, Vehicle_num);
     CMLKF_batch_veh_rmse = zeros(repeat_count, Vehicle_num);
@@ -397,7 +423,7 @@ function veh_rmse = run_filter(method_name, trajectories, anchors, ...
                 uwb_rel(i, :) = trajectories.(name).UWB_Relative(uwb_idx, 2:end);
             end
             % 统一应用基站数量掩码与车间相对测距掩码
-            uwb_anc(:, ~anchor_mask) = NaN;
+            uwb_anc(~anchor_mask) = NaN;
             uwb_rel(~rel_mask)       = NaN;
             
             kf.update(uwb_anc, uwb_rel);
