@@ -4,12 +4,13 @@
 % 验证目的: 在固定拓扑下，随着逻辑通信等级 L 的提升，DMLKF_L 完全等价于 CMLKF
 % [测量掩码] 为 CMLKF 施加与 DMLKF_L 完全相同的相对测距掩码（只改调用侧，
 %            不修改 CMLKF 类本身），保证两者在同一张测量图下进行公平对比。
+% 数据集源于DMLKF_code/Data
 % =========================================================================
 clc; clear; close all;
 
 %% 1. 实验参数与运行配置
-Vehicle_num = 12;            
-Anchor_num  = 5;             
+Vehicle_num = 16;            
+Anchor_num  = 3;             
 K_degree    = 4;        % 1-hop 物理邻居数
 
 % 保留一定比例的零偏误差以破坏 IMU 先验，凸显测距优化优势
@@ -17,7 +18,7 @@ bias_comp_ratio = 1;
 data_ratio      = 0.2;  % 数据集截取比例
 
 % 运行与保存控制标志
-save_flag = 0;          % 1: 保存汇总表(CSV)与对比图(PNG); 0: 不保存
+save_flag = 1;          % 1: 保存汇总表(CSV)与对比图(PNG); 0: 不保存
 run_flag  = 1;          % 1: 运行实验; 0: 仅读取已有结果并打印、绘图
 
 % 路径配置（锁定在当前脚本所在的 DMLKF_L_Test 文件夹下）
@@ -178,7 +179,7 @@ for test_idx = 1:length(L_test_list)
     fprintf('[Experiment %d] 正在运行 DMLKF_L (通信等级 L = %d)...\n', test_idx, L);
     
     % prue数据集不会有RMSE回升，200次迭代完全足够收敛，可以测试更小的iter提高运行速度
-    kf_dmlkf_max_iter = 70; % 70次也够 在12车5基站数据集下
+    kf_dmlkf_max_iter = 130; 
     kf_dmlkf          = DMLKF_L(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, kf_dmlkf_max_iter, L); 
     kf_dmlkf.beta_inv = 0.01;
     kf_dmlkf.epsilon  = 1e-8;    % 关键；不设就是类默认的 1e-4
