@@ -1,0 +1,3 @@
+一、DMLKF_L_Test实验
+1、CMLKF的收敛表现基本在Iter=30的时候够用，且Iter增加也不改变，意味着真的收敛了；DMLKF_L发现iter增加呈现U型，即便是在pure数据集下。在12Veh_5Anc_K4的实验中，DMLKF_L的Iter可以设为70（目前结果是用150跑的，70的会不一样，但最终也能证明等价）；16Veh_3Anc_K4的实验中，DMLKF的iter=130，可以跑出完美可用的L_MAX=4的结果
+
