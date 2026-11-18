@@ -16,9 +16,9 @@ neighbor_num   = 0;              % 每辆车的相对测距邻居数量 (取值�
 Anchor_mark    = 0;              % 0: Anchor_run_num表示每车基站数; 1: 表示全网所有车的总基站测距条数
 dataset_id     = 'C_4_alg_50_A';
 
-run_flag    = 1;          % 1: 重新运行滤波实验; 0: 直接读取已有 CSV 结果打印并作图
-save_flag   = 0;          % 1: 保存结果至 CSV; 0: 不保存
-figure_save = 0;          % 1: 保存图片至 PNG; 0: 仅显示不保存
+run_flag    = 0;          % 1: 重新运行滤波实验; 0: 直接读取已有 CSV 结果打印并作图
+save_flag   = 1;          % 1: 保存结果至 CSV; 0: 不保存
+figure_save = 1;          % 1: 保存图片至 PNG; 0: 仅显示不保存
 
 bias_comp_ratio = 1.0;    % 1.0 表示完全补偿 IMU 零偏
 data_ratio      = 1.0;    % 每个批次使用的数据比例
@@ -34,11 +34,16 @@ iekf_max_iter = 30;
 
 % --- CPF 参数 ---
 rng_base_seed = 20261118;
-cpf_params.num_particles          = 1000;
-cpf_params.neff_ratio             = 0.6; % 重采样频率阈值
+% cpf_params.num_particles          = 1500;
+% cpf_params.neff_ratio             = 0.5; % 重采样频率阈值
+% cpf_params.temper_ess_ratio       = 0.8; % 退火步长 ESS 阈值
+% cpf_params.n_mcmc                 = 10;  % 每个退火阶段 MH 次数
+cpf_params.depletion_streak_limit = 3;
+
+cpf_params.num_particles          = 1500;
+cpf_params.neff_ratio             = 0.5; % 重采样频率阈值
 cpf_params.temper_ess_ratio       = 0.8; % 退火步长 ESS 阈值
 cpf_params.n_mcmc                 = 10;  % 每个退火阶段 MH 次数
-cpf_params.depletion_streak_limit = 3;
 
 % --- 参数合法性校验 ---
 Anchor_run_num = Anchor_run_num(:)';
