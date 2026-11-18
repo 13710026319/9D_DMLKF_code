@@ -18,7 +18,7 @@ end
 % --- 仿真时间与批次配置 ---
 t_end         = 40;          % 每个批次的仿真时长 (s)
 N_steps       = round(t_end / dt_imu) + 1;
-repeat_time   = 3;           % 生成的独立批次数量
+repeat_time   = 1;           % 生成的独立批次数量
 N_steps_total = N_steps * repeat_time;
 
 % --- 实体数量配置 ---
@@ -49,10 +49,10 @@ IMU_noise_params.sigma_ba  = 0.05;
 IMU_noise_params.sigma_bw  = 0.01;
 
 % --- 初始状态先验误差标准差配置 ---
-position_prior_std_xy  = 1.5;   % XY 轴初始位置偏移标准差 (m)
+position_prior_std_xy  = 1;   % XY 轴初始位置偏移标准差 (m)
 position_prior_std_z   = 1;   % Z 轴初始位置偏移标准差 (m)
 velocity_prior_std     = 0.5;   % 初始速度偏移标准差 (m/s)
-attitude_prior_std_deg = 20.0;  % 初始三轴姿态偏移标准差 (deg)
+attitude_prior_std_deg = 10.0;  % 初始三轴姿态偏移标准差 (deg)
 
 std_vec     = [position_prior_std_xy; position_prior_std_xy; position_prior_std_z];
 att_std_rad = deg2rad(attitude_prior_std_deg);
@@ -281,8 +281,8 @@ function [trajectories, anchors, truth_position] = env_setup_E3( ...
     % 三维姿态机动幅度 (打破水平零倾角退化区)
     % roll_max_rad      = deg2rad(28); % 最大横滚角 28 deg
     % pitch_max_rad     = deg2rad(24); % 最大俯仰角 24 deg
-    roll_max_rad      = deg2rad(50); % 最大横滚角 50 deg
-    pitch_max_rad     = deg2rad(60); % 最大俯仰角 60 deg
+    roll_max_rad      = deg2rad(70); % 最大横滚角 50 deg
+    pitch_max_rad     = deg2rad(80); % 最大俯仰角 60 deg
 
     % 显式定义 20x20m 场地内的 30 个固定基站池
     all_anchors_pool = [

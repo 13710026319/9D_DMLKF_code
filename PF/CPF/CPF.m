@@ -1,7 +1,8 @@
 classdef CPF < handle
-    % CPF - Classic Euclidean Centralized Particle Filter (欧氏空间集中式粒子滤波)
-    % 9I 维联合欧氏状态 X = [p; v; eta] \in R^{9I} 上的蒙特卡洛滤波 (其中 eta = [roll; pitch; yaw] 为欧拉角)。
-    % 预测步与更新步严格在平直欧氏空间中进行，不含任何 SO(3) 李群流形/切空间映射。
+    % CPF - Centralized Particle Filter (集中式粒子滤波)
+    % 9I 维联合状态 (位置3I、速度3I、姿态SO(3)^I) 上的蒙特卡洛滤波。
+    % 预测步严格对应文档 Section II；更新步在文档 Section III 基础上采用
+    % "自适应似然退火 + MCMC 移动"，以应对初始误差大导致的粒子贫化。
 
     properties
         Vehicle_num
@@ -18,27 +19,27 @@ classdef CPF < handle
 
         % 粒子滤波核心参数
         Np
-        neff_ratio       = 0.5    % 跨历元重采样触发阈值比例 (控制重采样频率)
-        temper_ess_ratio = 0.5    % 退火内部单步 Δγ 的 ESS 阈值比例 (控制退火步长)
-        rough_coeff      = 0.10   % (仅旧批处理路径) roughening 系数
-        min_pos_jitter   = 0.001  % 位置最小协方差保底噪底 (m)
-        min_vel_jitter   = 0.002  % 速度最小协方差保底噪底 (m/s)
-        min_att_jitter   = 0.0005 % 欧拉角最小协方差保底噪底 (rad)
+        neff_ratio       = 0.5   % 跨历元重采样触发阈值比例 (制御重采样频率)
+        temper_ess_ratio = 0.5   % 退火内部单步 Δγ 的 ESS 阈值比例 (控制退火步长)
+        rough_coeff      = 0.10  % (仅旧批处理路径) roughening 系数
+        min_pos_jitter   = 0.001 % 位置最小协方差保底噪底 (m)
+        min_vel_jitter   = 0.002 % 速度最小协方差保底噪底 (m/s)
+        min_att_jitter   = 0.0005% 姿态最小协方差保底噪底 (rad)
 
         prior_pos_std = [0; 0; 0]
         prior_vel_std = 0
         prior_att_std = 0
 
-        % ---- 似然退火 + MCMC 内部参数 ----
-        use_tempering   = true    % true: 自适应退火 SMC；false: 旧批处理路径
-        n_mcmc          = 3       % 每个退火阶段的 MH 迭代次数
-        n_mcmc_final    = 15      % 最终 γ=1 阶段的 MH 迭代次数
-        mcmc_scale      = 0.5     % MH 随机游走步长缩放 (自适应调整)
-        mcmc_acc_target = 0.25    % 目标接受率
-        max_stages      = 300     % 内部固化：单历元最大退火阶段数上限
-        min_dgamma      = 1e-6    % 单阶段最小 γ 增量
-        last_num_stages = 0       % 诊断：上一历元退火阶段数
-        last_accept     = NaN     % 诊断：上一历元平均 MH 接受率
+        % ---- 似然退火 + MCMC 内部参数 (max_stages 已固化，无需外部传入) ----
+        use_tempering   = true   % true: 自适应退火 SMC；false: 旧批处理路径
+        n_mcmc          = 3      % 每个退火阶段的 MH 迭代次数
+        n_mcmc_final    = 15     % 最终 γ=1 阶段的 MH 迭代次数
+        mcmc_scale      = 0.5    % MH 随机游走步长缩放 (自适应调整)      
+        mcmc_acc_target = 0.25   % 目标接受率
+        max_stages      = 300    % 内部固化：单历元最大退火阶段数上限
+        min_dgamma      = 1e-6   % 单阶段最小 γ 增量
+        last_num_stages = 0      % 诊断：上一历元退火阶段数
+        last_accept     = NaN    % 诊断：上一历元平均 MH 接受率
 
         % ---- 贫化监控与统计 ----
         batch_size             = 10
@@ -48,16 +49,15 @@ classdef CPF < handle
         resample_count         = 0
         severe_count           = 0
 
-        % 粒子内部欧氏状态矩阵 (均为 3I x Np 矩阵)
+        % 粒子内部状态
         P_p
         P_v
-        P_eta
+        P_R
         P_logw
 
         % MMSE 后验估计
         p
         v
-        eta
         R
     end
 
@@ -81,16 +81,10 @@ classdef CPF < handle
                 if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
             end
 
-            obj.Np  = 1000;
-            obj.p   = p0(:);
-            obj.v   = v0(:);
-            obj.eta = zeros(3 * Vehicle_num, 1);
-            obj.R   = zeros(3, 3, Vehicle_num);
-            for i = 1:Vehicle_num
-                eta_i = obj.rot_to_euler(R0(:, :, i));
-                obj.eta(3*i-2 : 3*i) = eta_i;
-                obj.R(:, :, i)       = obj.euler_to_rot(eta_i);
-            end
+            obj.Np = 1000;
+            obj.p  = p0(:);
+            obj.v  = v0(:);
+            obj.R  = R0;
 
             obj.set_particle_count(obj.Np);
         end
@@ -110,7 +104,7 @@ classdef CPF < handle
 
             obj.P_p    = repmat(obj.p(:), 1, Np_curr);
             obj.P_v    = repmat(obj.v(:), 1, Np_curr);
-            obj.P_eta  = repmat(obj.eta(:), 1, Np_curr);
+            obj.P_R    = repmat(obj.R, 1, 1, 1, Np_curr);
             obj.P_logw = log(1 / Np_curr) * ones(1, Np_curr);
 
             if any(pos_std_vec > 0) || vel_std > 0 || att_std_rad > 0
@@ -125,16 +119,20 @@ classdef CPF < handle
                 obj.P_v = obj.P_v + noise_v;
 
                 if att_std_rad > 0
-                    noise_eta = att_std_rad * randn(3 * I_num, Np_curr);
-                    noise_eta = noise_eta - mean(noise_eta, 2);
-                    obj.P_eta = obj.wrap_euler_batch(obj.P_eta + noise_eta);
+                    for i = 1:I_num
+                        noise_phi = att_std_rad * randn(3, Np_curr);
+                        noise_phi = noise_phi - mean(noise_phi, 2);
+                        Ri  = pagemtimes(repmat(obj.R(:, :, i), 1, 1, Np_curr), ...
+                                         obj.exp_SO3_batch(noise_phi));
+                        obj.P_R(:, :, i, :) = reshape(Ri, 3, 3, 1, Np_curr);
+                    end
                 end
             end
             obj.update_mmse_estimate();
         end
 
         % =========================================================
-        % 预测步：纯欧氏空间欧拉角状态传播 (对应文档 Section II 式 6-11)
+        % 预测步：文档 Section II (式 6-12)
         % =========================================================
         function predict(obj, acc_m, gyro_m)
             if size(obj.P_p, 2) ~= obj.Np
@@ -156,30 +154,25 @@ classdef CPF < handle
                 e_a = L_a * randn(3, N);
                 e_w = L_w * randn(3, N);
 
-                p_old   = obj.P_p(idx3, :);
-                v_old   = obj.P_v(idx3, :);
-                eta_old = obj.P_eta(idx3, :);
+                Ri    = reshape(obj.P_R(:, :, i, :), 3, 3, N);
+                v_old = obj.P_v(idx3, :);
+                p_old = obj.P_p(idx3, :);
 
+                phi = tau * (wi - e_w);
                 a_b = ai - e_a;
-                w_b = wi - e_w;
-
-                % 批量计算欧拉角对应的旋转矩阵 R(eta) 与欧拉角变化率 T(eta) * w_b
-                Ri      = obj.euler_to_rot_batch(eta_old);
-                eta_dot = obj.euler_rate_prod_batch(eta_old, w_b);
-
                 a_n = reshape(pagemtimes(Ri, reshape(a_b, 3, 1, N)), 3, N) + obj.g_vec;
 
-                % 纯欧氏向量加法更新
-                obj.P_eta(idx3, :) = obj.wrap_euler_batch(eta_old + tau * eta_dot);
-                obj.P_v(idx3, :)   = v_old + tau * a_n;
-                obj.P_p(idx3, :)   = p_old + tau * v_old + 0.5 * tau^2 * a_n;
+                Rn = pagemtimes(Ri, obj.exp_SO3_batch(phi));
+                obj.P_R(:, :, i, :) = reshape(Rn, 3, 3, 1, N);
+                obj.P_v(idx3, :) = v_old + tau * a_n;
+                obj.P_p(idx3, :) = p_old + tau * v_old + 0.5 * tau^2 * a_n;
             end
 
             obj.update_mmse_estimate();
         end
 
         % =========================================================
-        % 更新步：对应文档 Section III
+        % 更新步：文档 Section III
         % =========================================================
         function update(obj, uwb_anc, uwb_rel)
             if size(obj.P_p, 2) ~= obj.Np
@@ -245,12 +238,13 @@ classdef CPF < handle
             end
         end
 
-        % ---------------- 纯欧氏空间自适应似然退火 SMC ----------------
+        % ---------------- 自适应似然退火 SMC (已修复 γ=1 退出与双阈值分离) ----------------
         function severe = update_tempered(obj, meas)
             I_num = obj.Vehicle_num;
             N     = obj.Np;
             nP    = 3 * I_num;
 
+            % 分离两个阈值：ess_temp_tgt 控制退火步长，ess_res_tgt 控制重采样触发
             ess_temp_tgt = obj.temper_ess_ratio * N;
             ess_res_tgt  = obj.neff_ratio * N;
             severe       = false;
@@ -261,7 +255,8 @@ classdef CPF < handle
 
             logL = obj.loglik(obj.P_p, meas);
 
-            % [快速通道]：单步 γ=1 后 ESS 仍高于重采样阈值，直接按纯正 SIR 粒子滤波更新权重
+            % [快速通道]：若一步直接加满 γ=1 后，ESS 仍高于重采样阈值 ess_res_tgt，
+            % 则无需退火、无需切空间高斯拟合与 MCMC 扰动，直接按纯正 SIR 粒子滤波更新权重！
             logw_full = logw + logL;
             logw_full = logw_full - max(logw_full);
             logw_full = logw_full - log(sum(exp(logw_full)));
@@ -273,12 +268,11 @@ classdef CPF < handle
                 return;
             end
 
-            % [退火通道]：直接在 9I 维欧氏空间拼接状态矩阵 X = [P_p; P_v; P_eta]
-            w0      = exp(logw);
-            eta_ref = obj.P_eta(:, 1);
-            eta_unw = eta_ref + obj.wrap_angle(obj.P_eta - eta_ref);
-            X       = [obj.P_p; obj.P_v; eta_unw];
+            % [退火通道]：当直接更新会导致 ESS < ess_res_tgt 时，启动切空间退火 + MCMC
+            obj.update_mmse_estimate();
+            [X, Rref] = obj.to_chart();
 
+            w0     = exp(logw);
             mu0    = X * w0(:);
             Xc     = X - mu0;
             fvar   = obj.floor_variance();
@@ -292,6 +286,7 @@ classdef CPF < handle
             acc_sum = 0;
             acc_cnt = 0;
 
+            % 若起始先验权重已低于重采样阈值，先重采样归整
             if obj.ess_of(logw) < ess_res_tgt
                 idx  = obj.systematic_resample(exp(logw));
                 X    = X(:, idx); logL = logL(idx); lp = lp(idx);
@@ -322,6 +317,7 @@ classdef CPF < handle
                 if r - dg < 1e-12, gamma = 1; end
 
                 if gamma < 1
+                    % 中间退火阶段：重采样 + 在当前温度 gamma 下执行 MCMC 移动
                     idx  = obj.systematic_resample(exp(logw));
                     X    = X(:, idx); logL = logL(idx); lp = lp(idx);
                     logw = -log(N) * ones(1, N);
@@ -329,6 +325,9 @@ classdef CPF < handle
                     [X, logL, lp, acc] = obj.mcmc_move(X, logL, lp, gamma, meas, logprior, fvar);
                     acc_sum = acc_sum + acc; acc_cnt = acc_cnt + 1;
                 else
+                    % [修复 γ=1 退出缺陷]：到达终点 γ=1 时，若经历了多步退火或最终 ESS 低于重采样阈值，
+                    % 先用当前精确连续权重更新一次粒子状态，再重采样并在 γ=1 完整后验下做最终 MCMC 细化，
+                    % 消除残留的低权重废粒子，确保进入下一拍预测步的粒子 100% 有效！
                     if n_stage > 1 || obj.ess_of(logw) < ess_res_tgt
                         idx  = obj.systematic_resample(exp(logw));
                         X    = X(:, idx); logL = logL(idx); lp = lp(idx);
@@ -340,10 +339,10 @@ classdef CPF < handle
                 end
             end
 
-            % 直接写回欧氏状态矩阵
-            obj.P_p    = X(1:nP, :);
-            obj.P_v    = X(nP+1:2*nP, :);
-            obj.P_eta  = obj.wrap_euler_batch(X(2*nP+1:end, :));
+            % 写回粒子状态并计算最终 MMSE 后验估计
+            obj.P_p = X(1:nP, :);
+            obj.P_v = X(nP+1:2*nP, :);
+            obj.from_chart(X(2*nP+1:end, :), Rref);
             obj.P_logw = log(max(exp(logw), realmin));
             obj.update_mmse_estimate();
 
@@ -414,7 +413,7 @@ classdef CPF < handle
             e = sum(w)^2 / sum(w.^2);
         end
 
-        % ---------------- 旧的批处理路径 (纯欧氏版) ----------------
+        % ---------------- 旧的批处理路径 (对照用) ----------------
         function severe = update_batched(obj, meas)
             M  = numel(meas.val);
             bs = max(1, obj.batch_size);
@@ -445,24 +444,32 @@ classdef CPF < handle
             obj.resample_count = obj.resample_count + 1;
             N = obj.Np;
 
-            std_p_pre   = std(obj.P_p, 0, 2);
-            std_v_pre   = std(obj.P_v, 0, 2);
-            eta_ref     = obj.P_eta(:, 1);
-            std_eta_pre = std( obj.wrap_angle(obj.P_eta - eta_ref), 0, 2 );
+            std_p_pre = std(obj.P_p, 0, 2);
+            std_v_pre = std(obj.P_v, 0, 2);
 
             idx = obj.systematic_resample(w_norm);
             obj.P_p    = obj.P_p(:, idx);
             obj.P_v    = obj.P_v(:, idx);
-            obj.P_eta  = obj.P_eta(:, idx);
+            obj.P_R    = obj.P_R(:, :, :, idx);
             obj.P_logw = log(1 / N) * ones(1, N);
 
-            jit_p   = min(0.2, obj.rough_coeff * std_p_pre   + obj.min_pos_jitter);
-            jit_v   = min(0.2, obj.rough_coeff * std_v_pre   + obj.min_vel_jitter);
-            jit_eta = min(0.2, obj.rough_coeff * std_eta_pre + obj.min_att_jitter);
+            jit_p = min(0.2, obj.rough_coeff * std_p_pre + obj.min_pos_jitter);
+            jit_v = min(0.2, obj.rough_coeff * std_v_pre + obj.min_vel_jitter);
+            obj.P_p = obj.P_p + jit_p .* randn(size(obj.P_p));
+            obj.P_v = obj.P_v + jit_v .* randn(size(obj.P_v));
 
-            obj.P_p   = obj.P_p   + jit_p   .* randn(size(obj.P_p));
-            obj.P_v   = obj.P_v   + jit_v   .* randn(size(obj.P_v));
-            obj.P_eta = obj.wrap_euler_batch(obj.P_eta + jit_eta .* randn(size(obj.P_eta)));
+            for vi = 1:obj.Vehicle_num
+                Ri = reshape(obj.P_R(:, :, vi, :), 3, 3, N);
+                [U, ~, V] = svd(sum(Ri, 3));
+                R_mean = U * diag([1, 1, det(U * V')]) * V';
+                err = obj.log_SO3_batch(pagemtimes(R_mean, 'transpose', Ri, 'none'));
+                sigma_theta = sqrt(mean(sum(err.^2, 1)));
+                jit_att = obj.rough_coeff * sigma_theta + obj.min_att_jitter;
+                if jit_att > 0
+                    Ri = pagemtimes(Ri, obj.exp_SO3_batch(jit_att * randn(3, N)));
+                    obj.P_R(:, :, vi, :) = reshape(Ri, 3, 3, 1, N);
+                end
+            end
         end
 
         function idx = systematic_resample(~, w)
@@ -481,7 +488,6 @@ classdef CPF < handle
         end
 
         function update_mmse_estimate(obj)
-            % 对应文档式 (18)：纯欧氏空间加权平均
             max_logw = max(obj.P_logw);
             w_norm   = exp(obj.P_logw - max_logw);
             w_norm   = w_norm(:) / sum(w_norm);
@@ -489,82 +495,106 @@ classdef CPF < handle
             obj.p = obj.P_p * w_norm;
             obj.v = obj.P_v * w_norm;
 
-            % 欧拉角加权平均 (相对于参考粒子解卷绕后求线性加权和，防止 ±pi 跳变)
-            eta_ref = obj.P_eta(:, 1);
-            eta_unw = eta_ref + obj.wrap_angle(obj.P_eta - eta_ref);
-            obj.eta = obj.wrap_euler_batch(eta_unw * w_norm);
-
-            % 同步更新旋转矩阵属性 R，保证外部接口兼容
             for i = 1:obj.Vehicle_num
-                obj.R(:, :, i) = obj.euler_to_rot(obj.eta(3*i-2 : 3*i));
+                R_i_all = reshape(obj.P_R(:, :, i, :), 9, obj.Np);
+                R_bar   = reshape(R_i_all * w_norm, 3, 3);
+                [U, ~, V] = svd(R_bar);
+                obj.R(:, :, i) = U * diag([1, 1, det(U * V')]) * V';
             end
         end
 
         % =========================================================
-        % 欧氏空间欧拉角辅助工具 (无李群/李代数运算)
+        % SO(3) 切空间图表: delta = log(R_ref' * R_k)
         % =========================================================
-        function R = euler_to_rot(~, eta)
-            phi = eta(1); th = eta(2); psi = eta(3);
-            cp = cos(phi); sp = sin(phi);
-            ct = cos(th);  st = sin(th);
-            cy = cos(psi); sy = sin(psi);
-
-            R = [ct*cy, sp*st*cy - cp*sy, cp*st*cy + sp*sy;
-                 ct*sy, sp*st*sy + cp*cy, cp*st*sy - sp*cy;
-                 -st,   sp*ct,            cp*ct];
+        function [X, Rref] = to_chart(obj)
+            I_num = obj.Vehicle_num;
+            N  = obj.Np;
+            nP = 3 * I_num;
+            X  = zeros(9 * I_num, N);
+            X(1:nP, :)        = obj.P_p;
+            X(nP+1:2*nP, :)   = obj.P_v;
+            Rref = obj.R;
+            for i = 1:I_num
+                Ri  = reshape(obj.P_R(:, :, i, :), 3, 3, N);
+                rel = pagemtimes(Rref(:, :, i), 'transpose', Ri, 'none');
+                X(2*nP+3*i-2 : 2*nP+3*i, :) = obj.log_SO3_batch(rel);
+            end
         end
 
-        function eta = rot_to_euler(~, R)
-            st  = max(-1, min(1, -R(3, 1)));
-            th  = asin(st);
-            phi = atan2(R(3, 2), R(3, 3));
-            psi = atan2(R(2, 1), R(1, 1));
-            eta = [phi; th; psi];
+        function from_chart(obj, Phi, Rref)
+            I_num = obj.Vehicle_num;
+            N = obj.Np;
+            for i = 1:I_num
+                Rn = pagemtimes(repmat(Rref(:, :, i), 1, 1, N), ...
+                                obj.exp_SO3_batch(Phi(3*i-2:3*i, :)));
+                obj.P_R(:, :, i, :) = reshape(Rn, 3, 3, 1, N);
+            end
         end
 
-        function R = euler_to_rot_batch(~, eta)
-            % eta: 3 x N -> R: 3 x 3 x N
-            N   = size(eta, 2);
-            phi = eta(1, :); th = eta(2, :); psi = eta(3, :);
-            cp  = cos(phi);  sp = sin(phi);
-            ct  = cos(th);   st = sin(th);
-            cy  = cos(psi);  sy = sin(psi);
+        % =========================================================
+        % 李群/李代数工具
+        % =========================================================
+        function S = skew(~, v)
+            S = [0, -v(3), v(2); v(3), 0, -v(1); -v(2), v(1), 0];
+        end
+
+        function v = log_SO3(~, R)
+            tr = trace(R);
+            theta = acos(max(-1, min(1, (tr - 1) / 2)));
+            if theta < 1e-6
+                v = zeros(3, 1);
+            else
+                w_skew = (theta / (2 * sin(theta))) * (R - R');
+                v = [w_skew(3, 2); w_skew(1, 3); w_skew(2, 1)];
+            end
+        end
+
+        function R = exp_SO3(obj, v)
+            theta = norm(v);
+            if theta < 1e-6
+                R = eye(3) + obj.skew(v);
+            else
+                n = v / theta; S = obj.skew(n);
+                R = eye(3) + sin(theta) * S + (1 - cos(theta)) * (S * S);
+            end
+        end
+
+        function R = exp_SO3_batch(~, phi)
+            N = size(phi, 2);
+            x = phi(1, :); y = phi(2, :); z = phi(3, :);
+            th2 = x.^2 + y.^2 + z.^2;
+            th  = sqrt(th2);
+            small = th < 1e-6;
+            ths = th; ths(small) = 1;
+            A = sin(ths) ./ ths;               A(small) = 1 - th2(small) / 6;
+            B = (1 - cos(ths)) ./ ths.^2;      B(small) = 0.5 - th2(small) / 24;
+            C = 1 - B .* th2;
 
             R = zeros(3, 3, N);
-            R(1,1,:) = reshape(ct.*cy,                1, 1, N);
-            R(1,2,:) = reshape(sp.*st.*cy - cp.*sy,   1, 1, N);
-            R(1,3,:) = reshape(cp.*st.*cy + sp.*sy,   1, 1, N);
-            R(2,1,:) = reshape(ct.*sy,                1, 1, N);
-            R(2,2,:) = reshape(sp.*st.*sy + cp.*cy,   1, 1, N);
-            R(2,3,:) = reshape(cp.*st.*sy - sp.*cy,   1, 1, N);
-            R(3,1,:) = reshape(-st,                   1, 1, N);
-            R(3,2,:) = reshape(sp.*ct,                1, 1, N);
-            R(3,3,:) = reshape(cp.*ct,                1, 1, N);
+            R(1,1,:) = reshape(C + B.*x.^2,   1, 1, N);
+            R(2,2,:) = reshape(C + B.*y.^2,   1, 1, N);
+            R(3,3,:) = reshape(C + B.*z.^2,   1, 1, N);
+            R(1,2,:) = reshape(B.*x.*y - A.*z, 1, 1, N);
+            R(2,1,:) = reshape(B.*x.*y + A.*z, 1, 1, N);
+            R(1,3,:) = reshape(B.*x.*z + A.*y, 1, 1, N);
+            R(3,1,:) = reshape(B.*x.*z - A.*y, 1, 1, N);
+            R(2,3,:) = reshape(B.*y.*z - A.*x, 1, 1, N);
+            R(3,2,:) = reshape(B.*y.*z + A.*x, 1, 1, N);
         end
 
-        function eta_dot = euler_rate_prod_batch(~, eta, w_b)
-            % 计算文档式 (5) 与式 (8): eta_dot = T(eta) * (w_m - e_w) (3 x N)
-            phi = eta(1, :); th = eta(2, :);
-            cp  = cos(phi);  sp = sin(phi);
-            ct  = cos(th);   st = sin(th);
-            small_ct = abs(ct) < 1e-4;
-            ct(small_ct) = sign(ct(small_ct) + eps) * 1e-4;
-            tt = st ./ ct;
-
-            wx = w_b(1, :); wy = w_b(2, :); wz = w_b(3, :);
-            eta_dot = [wx + (sp .* wy + cp .* wz) .* tt;
-                       cp .* wy - sp .* wz;
-                       (sp .* wy + cp .* wz) ./ ct];
-        end
-
-        function a = wrap_angle(~, a)
-            a = mod(a + pi, 2*pi) - pi;
-        end
-
-        function eta = wrap_euler_batch(~, eta)
-            eta(1, :) = mod(eta(1, :) + pi, 2*pi) - pi;
-            eta(2, :) = max(-pi/2 + 1e-4, min(pi/2 - 1e-4, eta(2, :)));
-            eta(3, :) = mod(eta(3, :) + pi, 2*pi) - pi;
+        function v = log_SO3_batch(~, R)
+            N = size(R, 3);
+            tr = reshape(R(1,1,:) + R(2,2,:) + R(3,3,:), 1, N);
+            w = 0.5 * [reshape(R(3,2,:) - R(2,3,:), 1, N); ...
+                       reshape(R(1,3,:) - R(3,1,:), 1, N); ...
+                       reshape(R(2,1,:) - R(1,2,:), 1, N)];
+            s = sqrt(sum(w.^2, 1));
+            c = 0.5 * (tr - 1);
+            theta = atan2(s, c);
+            f = ones(1, N);
+            big = s > 1e-9;
+            f(big) = theta(big) ./ s(big);
+            v = w .* f;
         end
     end
 end
