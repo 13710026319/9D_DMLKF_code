@@ -12,4 +12,4 @@
 
 三、DEKF_DIEKF_DMLKF实验
 1、该实验下所有算法都是SO3姿态表示。车辆的基站测距设有掩码，30%全基站，50%半基站，20%无基站。对称无向图拓扑网络，建议车辆数、邻居数都设为偶数，尤其是邻居数，避免拓扑网络中的对角问题。
-2、目前在 generate_data_I 脚本生成的DEKF_DIEKF_DMLKF_20_A数据集下，固定参数为DMLKF_max_iter =10, beta=70; DIEKF_ADMM_iter = 10, rho = 50。得到的是DEKF,DIEKF,DIEKF_ADMM,DMLKF : 0.4917，0.4903，0.1336，0.0993。这个数据集是蜂窝状轨迹+1-2m落差基站。基站与轨迹之间的距离算不上很近，可能也是DEKF,DIEKF没有差距很大的原因之一，因此generate_data_I的I表示非线性等级为I级，后续将研究II级数据集进行测试。
+2、目前在 generate_data_I 脚本生成的DEKF_DIEKF_DMLKF_20_A数据集下，固定参数为DMLKF_max_iter =10, beta=70; DIEKF_ADMM_iter = 10, rho = 50。得到的是DEKF,DIEKF,DIEKF_ADMM,DMLKF : 0.3845，0.3790，0.1383，0.1079。这个数据集是蜂窝状轨迹+1-2m落差基站。基站与轨迹之间的距离算不上很近，可能也是DEKF,DIEKF没有差距很大的原因之一，因此generate_data_I的I表示非线性等级为I级，后续将研究II级数据集进行测试。

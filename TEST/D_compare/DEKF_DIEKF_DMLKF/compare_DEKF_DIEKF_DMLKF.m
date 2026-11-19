@@ -19,7 +19,7 @@ bias_comp_ratio = 1;                    % IMU 零偏补偿比例
 data_ratio      = 1;                  % 每个批次的数据截取比例
 
 % 1.3 数据集与运行控制标志
-dataset_id = 'DEKF_DIEKF_DMLKF_20_A';  % 数据集标识
+dataset_id = 'DEKF_DIEKF_DMLKF_20_3';  % 数据集标识
 save_flag  = 1;                         % 是否保存实验结果至 CSV
 run_flag   = 1;                         % 1: 运行实验; 0: 仅读取并打印已有结果
 
