@@ -1,6 +1,7 @@
 % compare_C_4_alg.m
 % 在同一组多批次数据上比较 CEKF、CIEKF、CMLKF 和 CPF 在不同基站数量下的位置 RMSE。
 % 四个算法共享相同的初始状态误差、基站观测掩码、车间相对测距掩码和输入测量。
+% 注意：该数据集生成后的数据目前测试效果很差，需要进一步修改此数据集！！
 
 clc; clear; close all;
 
@@ -10,7 +11,7 @@ Anchor_num     = 12;             % 数据集中的总基站数
 Anchor_run_num = 3:12;           % 待测试的基站数量 (可为列表如 4:12 或单个数如 10)
 neighbor_num   = 0;              % 每辆车的相对测距邻居数量 (取值范围: 0 ~ Vehicle_num-1)
 Anchor_mark    = 0;              % 0: Anchor_run_num表示每车基站数; 1: 表示全网所有车的总基站测距条数
-dataset_id     = 'C_4_alg_40_B';
+dataset_id     = 'C_4_alg_40_II';
 
 run_flag    = 1;          % 1: 重新运行滤波实验; 0: 直接读取已有 CSV 结果打印并作图
 save_flag   = 1;          % 1: 保存结果至 CSV; 0: 不保存
