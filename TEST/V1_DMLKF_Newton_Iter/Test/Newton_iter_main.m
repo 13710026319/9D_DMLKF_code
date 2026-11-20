@@ -36,12 +36,20 @@ save_flag = 1;                          % 1: 保存 CSV 与图片; 0: 不保存
 
 % --- 1.5 迭代次数与优化超参数配置 ---
 V1_max_iter       = 30;
+% DMLKF_iter_groups = {
+%     [1 3 5 7 10], ...
+%     [20 15], ...
+%     [25], ...
+%     [30], ...
+%     [35]
+% };
+
 DMLKF_iter_groups = {
-    [1 3 5 7 10], ...
-    [20 15], ...
-    [25], ...
-    [30], ...
-    [35]
+    [1 3 5], ...
+    [7 10], ...
+    [15], ...
+    [20], ...
+    [25]
 };
 
 V1_beta_inv        = 0.2;
@@ -128,7 +136,7 @@ jobs = struct('mode', {}, 'iters', {}, 'tag', {});
 jobs(end+1) = struct('mode', 'V1', 'iters', V1_max_iter, 'tag', 'V1');
 for q = 1:numel(active_groups)
     jobs(end+1) = struct('mode', 'DMLKF', ...
-        'iters', active_groups{q}, 'tag', sprintf('DMLKF_%d', q)); %#ok<AGROW>
+        'iters', active_groups{q}, 'tag', sprintf('DMLKF_%d', q)); 
 end
 
 matlab_exe = fullfile(matlabroot, 'bin', 'matlab.exe');
@@ -333,15 +341,24 @@ end
 % -------------------------------------------------------------------------
 function plot_results(T, result_file, plot_file, K, V_num, A_num, ...
         data_ratio, do_save) %#ok<INUSL>
+    use_equal_spacing = true; % true: 横坐标各点等宽显示; false: 对数坐标显示
+
     v1_row = find(T.algorithm == "V1", 1);
     dml    = T(T.algorithm == "DMLKF", :);
     dml    = sortrows(dml, 'max_iter');
+
+    % 根据开关决定实际绘图的横坐标
+    if use_equal_spacing
+        x_vals = (1:height(dml))';
+    else
+        x_vals = dml.max_iter;
+    end
 
     fig = figure('Name', 'Newton iteration comparison', 'Color', 'w');
     hold on; grid on; box on;
     
     % 绘制分布式牛顿 (DMLKF) 曲线
-    plot(dml.max_iter, dml.pos_rmse_m, 'o-', 'LineWidth', 1.8, ...
+    plot(x_vals, dml.pos_rmse_m, 'o-', 'LineWidth', 1.8, ...
         'MarkerSize', 7, 'MarkerFaceColor', 'w', ...
         'Color', [0.85 0.20 0.15], 'DisplayName', 'Distributed Newton');
 
@@ -356,17 +373,25 @@ function plot_results(T, result_file, plot_file, K, V_num, A_num, ...
 
     % 标注各数据点具体数值
     for q = 1:height(dml)
-        text(dml.max_iter(q), dml.pos_rmse_m(q), ...
+        text(x_vals(q), dml.pos_rmse_m(q), ...
             sprintf('  %.4f', dml.pos_rmse_m(q)), ...
             'FontSize', 8, 'VerticalAlignment', 'bottom', ...
             'Interpreter', 'none');
     end
 
     % 坐标轴、标题与图例设置
-    set(gca, 'XScale', 'log');
-    xticks(dml.max_iter);
-    xticklabels(cellstr(string(dml.max_iter)));
-    xlim([min(dml.max_iter)/1.35, max(dml.max_iter)*1.45]);
+    if use_equal_spacing
+        set(gca, 'XScale', 'linear');
+        xticks(x_vals);
+        xticklabels(cellstr(string(dml.max_iter)));
+        xlim([0.5, height(dml) + 0.7]); % 右侧略微多留一点空间给最后一个点的文本标注
+    else
+        set(gca, 'XScale', 'log');
+        xticks(dml.max_iter);
+        xticklabels(cellstr(string(dml.max_iter)));
+        xlim([min(dml.max_iter)/1.35, max(dml.max_iter)*1.45]);
+    end
+
     ytickformat('%.4f');
     xlabel('Iterations', 'Interpreter', 'none');
     ylabel('RMSE');
