@@ -7,13 +7,13 @@ clc; clear; close all;
 
 %% ==================== 1. 测试参数配置 ====================
 Vehicle_num    = 1;
-Anchor_num     = 12;             % 数据集中的总基站数
-Anchor_run_num = 3:12;           % 待测试的基站数量 (可为列表如 4:12 或单个数如 10)
+Anchor_num     = 30;             % 数据集中的总基站数
+Anchor_run_num = 4:20;           % 待测试的基站数量 (可为列表如 4:12 或单个数如 10)
 neighbor_num   = 0;              % 每辆车的相对测距邻居数量 (取值范围: 0 ~ Vehicle_num-1)
 Anchor_mark    = 0;              % 0: Anchor_run_num表示每车基站数; 1: 表示全网所有车的总基站测距条数
-dataset_id     = 'C_4_alg_40_II';
+dataset_id     = 'C_4_alg_40_C';
 
-run_flag    = 1;          % 1: 重新运行滤波实验; 0: 直接读取已有 CSV 结果打印并作图
+run_flag    = 0;          % 1: 重新运行滤波实验; 0: 直接读取已有 CSV 结果打印并作图
 save_flag   = 1;          % 1: 保存结果至 CSV; 0: 不保存
 figure_save = 1;          % 1: 保存图片至 PNG; 0: 仅显示不保存
 

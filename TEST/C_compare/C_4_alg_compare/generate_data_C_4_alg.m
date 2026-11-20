@@ -22,14 +22,14 @@ repeat_time   = 1;           % 生成的独立批次数量
 N_steps_total = N_steps * repeat_time;
 
 % --- 实体数量配置 ---
-Vehicle_num = 2;             % 车辆/无人机数量 [1, 18]
-Anchor_num  = 12;            % UWB基站数量 [1, 30]
+Vehicle_num = 1;             % 车辆/无人机数量 [1, 18]
+Anchor_num  = 30;            % UWB基站数量 [1, 30]
 if Vehicle_num < 1 || Vehicle_num > 18, error('Vehicle_num 必须在 [1, 18] 范围内。'); end
 if Anchor_num < 1 || Anchor_num > 30,   error('Anchor_num 必须在 [1, 30] 范围内。'); end
 if repeat_time < 1 || round(repeat_time) ~= repeat_time, error('repeat_time 必须是正整数。'); end
 
 % --- 文件标识与随机种子配置 ---
-dataset_id = 'C_4_alg_40_4'; % 文件名后缀 ID
+dataset_id = 'C_4_alg_40_1'; % 文件名后缀 ID
 rng('shuffle');              
 rng_state  = rng;
 base_seed  = rng_state.Seed;
