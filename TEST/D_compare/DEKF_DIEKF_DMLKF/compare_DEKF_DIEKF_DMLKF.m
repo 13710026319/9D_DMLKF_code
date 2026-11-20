@@ -19,21 +19,32 @@ bias_comp_ratio = 1;                    % IMU 零偏补偿比例
 data_ratio      = 1;                  % 每个批次的数据截取比例
 
 % 1.3 数据集与运行控制标志
-dataset_id = 'DEKF_DIEKF_DMLKF_20_A';  % 数据集标识
-save_flag  = 1;                         % 是否保存实验结果至 CSV
-run_flag   = 0;                         % 1: 运行实验; 0: 仅读取并打印已有结果
+dataset_id = 'DEKF_DIEKF_DMLKF_60_I';  % 数据集标识
+save_flag  = 0;                         % 是否保存实验结果至 CSV
+run_flag   = 1;                         % 1: 运行实验; 0: 仅读取并打印已有结果
 
 % 1.4 算法超参数与迭代配置
 DIEKF_max_iter     = 3;                % DIEKF 本地高斯牛顿最大迭代次数
 
-DMLKF_max_iter     = 10;                % DMLKF 最大迭代次数
-DMLKF_beta_inv     = 70;                % DMLKF 正则化步长参数
+% I级数据集参数
+DMLKF_max_iter     = 20;                % DMLKF 最大迭代次数 60s->20~30
+DMLKF_beta_inv     = 5;                % DMLKF 正则化步长参数 随数据集时常增加可适当降低 60s->5
+DMLKF_ALPHA_SAFETY = 2;                 % DMLKF 分布式更新步长安全系数 随数据集时常增加可适当提高 例如60s->2
 DMLKF_print_flag   = 0;                 % DMLKF 调试信息打印开关
 
 DIEKF_ADMM_iter    = 10;               % DIEKF_ADMM 外层 ADMM 迭代次数
 DIEKF_ADMM_GN_iter = 3;                % DIEKF_ADMM 内层高斯牛顿迭代次数
-DIEKF_ADMM_rho     = 50;                % DIEKF_ADMM 惩罚参数
+DIEKF_ADMM_rho     = 10;                % DIEKF_ADMM 惩罚参数
 
+% II级数据集参数
+% DMLKF_max_iter     = 30;                % DMLKF 最大迭代次数
+% DMLKF_beta_inv     = 5;                % DMLKF 正则化步长参数
+% DMLKF_print_flag   = 0;                 % DMLKF 调试信息打印开关
+% DMLKF_ALPHA_SAFETY = 1.5;                 % DMLKF 分布式更新步长安全系数
+% 
+% DIEKF_ADMM_iter    = 10;               % DIEKF_ADMM 外层 ADMM 迭代次数
+% DIEKF_ADMM_GN_iter = 3;                % DIEKF_ADMM 内层高斯牛顿迭代次数
+% DIEKF_ADMM_rho     = 10;                % DIEKF_ADMM 惩罚参数
 
 %% 2. 路径配置与数据集加载
 % -------------------------------------------------------------------------
@@ -76,10 +87,8 @@ if ~exist(data_file, 'file')
     error('未找到数据集文件: %s\n请先运行生成脚本生成该数据！', data_file);
 end
 
-S = load(data_file, 'trajectories', 'anchors', ...
-    'IMU_noise_params', 'UWB_noise_params', ...
-    'Vehicle_num', 'Anchor_num', 'N_steps', 'N_steps_total', ...
-    'repeat_time', 't_end');
+% 直接加载全部字段，以便自动检测是否包含 II 级数据集的 scenario 字段
+S = load(data_file);
 
 % 2.4 数据集参数一致性校验
 if S.Vehicle_num ~= Vehicle_num || S.Anchor_num ~= Anchor_num
@@ -104,7 +113,7 @@ if mod(N_uwb_total, repeat_count) ~= 0
     error('UWB 总帧数无法被 repeat_time 整除。');
 end
 
-% 2.5 计算单批次步数与采样周期
+% 2.5 计算单批次步数与采样周期，并检测是否包含初始位置误差 (兼容 I 级与 II 级数据集)
 N_uwb_per_batch = N_uwb_total / repeat_count;
 N_steps_use     = max(2, round(N_steps_batch * data_ratio));
 N_steps_use     = min(N_steps_use, N_steps_batch);
@@ -114,11 +123,24 @@ fprintf('数据集加载成功: %s\n', data_file);
 fprintf('>> 共 %d 个独立批次，每批 %d 步；本次每批使用 %d 步 (%.1f%%)\n', ...
     repeat_count, N_steps_batch, N_steps_use, data_ratio * 100);
 
+if isfield(S, 'scenario') && isfield(S.scenario, 'initial_position_error')
+    has_init_err        = true;
+    prior_std_vec       = S.scenario.position_prior_std_vec(:);
+    initial_pos_err_all = S.scenario.initial_position_error;
+    fprintf('>> 检测到 II 级数据集：启用初始位置偏差 (Std = [%.2f, %.2f, %.2f] m)\n', ...
+        prior_std_vec(1), prior_std_vec(2), prior_std_vec(3));
+else
+    has_init_err        = false;
+    prior_std_vec       = [0.1; 0.1; 0.1];
+    initial_pos_err_all = zeros(3, Vehicle_num, repeat_count);
+    fprintf('>> 检测到 I 级数据集：无初始位置偏差 (默认零误差初值)\n');
+end
+
 % 2.6 提取传感器噪声协方差参数（确保四个算法条件完全一致）
 Noise.IMU_Sigma_a   = S.IMU_noise_params.sigma_na^2 * eye(3);
 Noise.IMU_Sigma_w   = S.IMU_noise_params.sigma_nw^2 * eye(3);
-Noise.UWB_sigma_anc = 0.1;
-Noise.UWB_sigma_rel = 0.1;
+Noise.UWB_sigma_anc = S.UWB_noise_params.sigma_anc;
+Noise.UWB_sigma_rel = S.UWB_noise_params.sigma_rel;
 
 
 %% 3. 生成静态拓扑掩码 (三档基站 + 对称环形车间拓扑)
@@ -141,12 +163,16 @@ for r = 1:repeat_count
     batch_trajectories = extract_batch( ...
         trajectories, r, N_steps_batch, N_uwb_per_batch);
 
+    init_pos_err_r = initial_pos_err_all(:, :, r);
+
     % 运行四种滤波算法并获取各车 RMSE
     batch_result = run_batch( ...
         batch_trajectories, anchors, Anchor_Mask, V2V_Mask, ...
         Vehicle_num, Anchor_num, N_steps_use, bias_comp_ratio, Noise, ...
+        init_pos_err_r, prior_std_vec, has_init_err, ...
         DIEKF_max_iter, ...
-        DMLKF_max_iter, DMLKF_beta_inv, DMLKF_print_flag, ...
+        DMLKF_max_iter, DMLKF_beta_inv, ...
+        DMLKF_ALPHA_SAFETY, DMLKF_print_flag, ...
         DIEKF_ADMM_iter, DIEKF_ADMM_GN_iter, DIEKF_ADMM_rho);
 
     % 记录当前批次各车辆的位置 RMSE
@@ -319,13 +345,15 @@ end
 function result = run_batch( ...
         trajectories, anchors, Anchor_Mask, V2V_Mask, ...
         Vehicle_num, Anchor_num, N_steps, bias_comp_ratio, Noise, ...
+        init_pos_err_r, prior_std_vec, has_init_err, ...
         DIEKF_max_iter, ...
-        DMLKF_max_iter, DMLKF_beta_inv, DMLKF_print_flag, ...
+        DMLKF_max_iter, DMLKF_beta_inv, ...
+        DMLKF_ALPHA_SAFETY, DMLKF_print_flag, ...
         DIEKF_ADMM_iter, DIEKF_ADMM_GN_iter, DIEKF_ADMM_rho)
     
     dt_imu = trajectories.V1.Time_true(2) - trajectories.V1.Time_true(1);
 
-    % --- 1. 提取全网车辆初始真实状态 ---
+    % --- 1. 提取全网车辆初始状态 (自动叠加 init_pos_err_r，I级数据集下为0) ---
     p0 = zeros(3 * Vehicle_num, 1);
     v0 = zeros(3 * Vehicle_num, 1);
     R0 = zeros(3, 3, Vehicle_num);
@@ -334,7 +362,7 @@ function result = run_batch( ...
         p0(3*i-2 : 3*i) = [
             trajectories.(v_name).X_true(1);
             trajectories.(v_name).Y_true(1);
-            trajectories.(v_name).Z_true(1)];
+            trajectories.(v_name).Z_true(1)] + init_pos_err_r(:, i);
         v0(3*i-2 : 3*i) = [
             trajectories.(v_name).Vx_true(1);
             trajectories.(v_name).Vy_true(1);
@@ -374,7 +402,8 @@ function result = run_batch( ...
     end
 
     kf_dmlkf = DMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, ...
-        p0, v0, R0, V2V_Mask, DMLKF_max_iter, Noise);
+        p0, v0, R0, V2V_Mask, DMLKF_max_iter, Noise, ...
+        DMLKF_ALPHA_SAFETY);
     kf_dmlkf.IMU_Sigma_a   = Noise.IMU_Sigma_a;
     kf_dmlkf.IMU_Sigma_w   = Noise.IMU_Sigma_w;
     kf_dmlkf.UWB_sigma_anc = Noise.UWB_sigma_anc;
@@ -382,6 +411,23 @@ function result = run_batch( ...
     kf_dmlkf.max_iter      = DMLKF_max_iter;
     kf_dmlkf.beta_inv      = DMLKF_beta_inv;
     kf_dmlkf.print_flag    = DMLKF_print_flag;
+
+    % 若为携带初始位置误差的 II 级数据集，同步更新四个滤波器的初始协方差矩阵
+    if has_init_err
+        Sigma_0_single = blkdiag(diag(prior_std_vec.^2), (0.1^2)*eye(3), ((pi/180)^2)*eye(3));
+        for i = 1:Vehicle_num
+            kf_dekf.Nodes{i}.Sigma  = Sigma_0_single;
+            kf_diekf.Nodes{i}.Sigma = Sigma_0_single;
+            
+            Ui_len_admm = length(kf_diekf_admm.U_list{i});
+            Cell_admm   = repmat({Sigma_0_single}, 1, Ui_len_admm);
+            kf_diekf_admm.Nodes{i}.SigmaJ = blkdiag(Cell_admm{:});
+            
+            Ui_len_dmlkf = length(kf_dmlkf.U_list{i});
+            Cell_dmlkf   = repmat({Sigma_0_single}, 1, Ui_len_dmlkf);
+            kf_dmlkf.Nodes{i}.SigmaJ = blkdiag(Cell_dmlkf{:});
+        end
+    end
 
     % --- 3. 预分配状态估计存储空间并写入初值 ---
     est_p_dekf       = zeros(N_steps, 3, Vehicle_num);

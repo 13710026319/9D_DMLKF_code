@@ -21,14 +21,14 @@ end
 % 1.2 场景规模与批次时长配置
 Vehicle_num   = 8;                              % 车辆总数
 Anchor_num    = 4;                              % 启用的 UWB 基站数量
-t_end         = 20;                             % 单批次仿真时长 (s)
+t_end         = 60;                             % 单批次仿真时长 (s)
 N_steps       = round(t_end / dt_imu) + 1;      % 单批次 IMU 总步数
-repeat_time   = 3;                              % 独立重复批次数量
+repeat_time   = 1;                              % 独立重复批次数量
 N_steps_total = N_steps * repeat_time;          % 所有批次拼接后的总步数
 
 % 1.3 数据集标识配置
 % 相同的 dataset_id 会直接覆盖同名 MAT 文件，但数据是不一样的
-dataset_id = 'DEKF_DIEKF_DMLKF_20_3';
+dataset_id = 'DEKF_DIEKF_DMLKF_60_I';
 
 if repeat_time < 1 || round(repeat_time) ~= repeat_time
     error('repeat_time must be a positive integer.');
@@ -136,23 +136,26 @@ h_anchor = plot3(anchors(:, 1), anchors(:, 2), anchors(:, 3), ...
     'MarkerEdgeColor', 'k', 'LineWidth', 1.5, ...
     'DisplayName', 'Anchors');
 
-% 5.3 绘制各车辆三维真实轨迹及起止点
+% 5.3 绘制各车辆第一批次 (1:N_steps) 三维真实轨迹及起止点
 colors = lines(Vehicle_num);
 h_traj = zeros(1, Vehicle_num);
 for n = 1:Vehicle_num
     v_name = sprintf('V%d', n);
     v_data = trajectories.(v_name);
+    X_plot = v_data.X_true(1:N_steps);
+    Y_plot = v_data.Y_true(1:N_steps);
+    Z_plot = v_data.Z_true(1:N_steps);
     
-    % 轨迹曲线
-    h_traj(n) = plot3(v_data.X_true, v_data.Y_true, v_data.Z_true, ...
+    % 轨迹曲线 (仅单批次真实圆弧，消除跨批次首尾连线)
+    h_traj(n) = plot3(X_plot, Y_plot, Z_plot, ...
         'Color', colors(n, :), 'LineWidth', 2.5, ...
         'DisplayName', sprintf('V%d', n));
     % 起点标记 (圆圈)
-    plot3(v_data.X_true(1), v_data.Y_true(1), v_data.Z_true(1), ...
+    plot3(X_plot(1), Y_plot(1), Z_plot(1), ...
         'o', 'MarkerSize', 8, 'MarkerFaceColor', colors(n, :), ...
         'Color', colors(n, :));
     % 终点标记 (星号)
-    plot3(v_data.X_true(end), v_data.Y_true(end), v_data.Z_true(end), ...
+    plot3(X_plot(end), Y_plot(end), Z_plot(end), ...
         '*', 'MarkerSize', 10, 'Color', colors(n, :));
 end
 view(3);

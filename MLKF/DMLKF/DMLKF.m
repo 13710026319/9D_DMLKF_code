@@ -43,7 +43,7 @@ classdef DMLKF < handle
     end
     
     methods
-        function obj = DMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, max_iter, Noise)
+        function obj = DMLKF(Vehicle_num, Anchor_num, anchors, dt_imu, p0, v0, R0, V2V_Mask, max_iter, Noise, ALPHA_SAFETY)
             if nargin < 9 || isempty(max_iter)
                 max_iter = 200;
             end
@@ -64,6 +64,10 @@ classdef DMLKF < handle
                 if isfield(Noise, 'IMU_Sigma_w'),   obj.IMU_Sigma_w   = Noise.IMU_Sigma_w;   end
                 if isfield(Noise, 'UWB_sigma_anc'), obj.UWB_sigma_anc = Noise.UWB_sigma_anc; end
                 if isfield(Noise, 'UWB_sigma_rel'), obj.UWB_sigma_rel = Noise.UWB_sigma_rel; end
+            end
+
+            if nargin >= 11 && ~isempty(ALPHA_SAFETY)
+                obj.ALPHA_SAFETY = ALPHA_SAFETY;
             end
 
             obj.max_iter = max_iter;   
